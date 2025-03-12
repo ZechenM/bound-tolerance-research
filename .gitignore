@@ -172,3 +172,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+/data
+/logs
+*.safetensors
+/results_worker_0
+/results_worker_1
+/results_worker_2
+*.pkl
