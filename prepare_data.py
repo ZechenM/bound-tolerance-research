@@ -164,7 +164,7 @@ if __name__ == "__main__":
     print("MNIST data prepared and split into 3 dataloaders.")
 
     # Prepare CIFAR-10 data for EfficientNetB0
-    prepare_cifar10_data(total_samples=3000)  # 1000 samples per worker
+    prepare_cifar10_data(total_samples=30000)  # 1000 samples per worker
 
     test_dataloader = prepare_mnist_test_data()
     filename = 'dataloader_test.pkl'
