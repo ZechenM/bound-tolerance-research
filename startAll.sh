@@ -28,7 +28,7 @@ rm -f .server_port
 # Determine whether to use compressed or Galore versions
 if [[ "$1" == "-d" ]]; then
     SERVER_SCRIPT="server_compressed.py"
-    WORKER_SCRIPT="dynamic_bound_loss/worker_trainer.py"
+    WORKER_SCRIPT="worker_trainer.py"
     SERVER_LOG="./logs/server_dynamic_bound_loss_log.txt"
     WORKER0_LOG="./logs/worker_dynamic_bound_loss_log0.txt"
     WORKER1_LOG="./logs/worker_dynamic_bound_loss_log1.txt"
