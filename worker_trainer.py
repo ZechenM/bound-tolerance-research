@@ -16,11 +16,14 @@ import numpy as np
 import os
 from sklearn.metrics import accuracy_score
 from torch.serialization import safe_globals
+import glob
+
+resume_from_checkpoint = True
 
 train_args = TrainingArguments(
-            num_train_epochs=3,
-            per_device_train_batch_size=4,
-            per_device_eval_batch_size=4,
+            num_train_epochs=5,
+            per_device_train_batch_size=16,
+            per_device_eval_batch_size=16,
             weight_decay=0.01,
             learning_rate=0.001,
             logging_steps=10,
@@ -30,6 +33,7 @@ train_args = TrainingArguments(
             dataloader_pin_memory=True,  # Enable pin_memory for faster data transfer to GPU
             report_to="none",
             logging_first_step=True,  # Log metrics for the first step
+            # fp8=True,
         )
 
 class Worker:
@@ -87,9 +91,9 @@ class Worker:
         print(f"Test samples: {len(self.eval_dataset)}")
 
         # Verify DataLoader output
-        for batch in self.train_dataset:
-            print(f"train_dataset Batch keys: {batch.keys()}")
-            break  # Just to check the first batch
+        # for batch in self.train_dataset:
+        #     print(f"train_dataset Batch keys: {batch.keys()}")
+        #     break  # Just to check the first batch
 
     def compute_metrics(self, eval_pred):
         """
@@ -102,18 +106,47 @@ class Worker:
         accuracy = accuracy_score(labels, predictions)
         return {"accuracy": accuracy}
 
+    def find_latest_checkpoint(self):
+        """Find the latest checkpoint directory for this worker."""
+        checkpoint_dir = f"./results_worker_{self.worker_id}"
+        if not os.path.exists(checkpoint_dir):
+            return None
+            
+        # Find all checkpoint directories
+        checkpoint_dirs = glob.glob(os.path.join(checkpoint_dir, "checkpoint-*"))
+        if not checkpoint_dirs:
+            return None
+            
+        # Extract checkpoint numbers and find the latest one
+        checkpoint_numbers = [int(d.split("-")[-1]) for d in checkpoint_dirs]
+        latest_checkpoint_num = max(checkpoint_numbers)
+        latest_checkpoint = os.path.join(checkpoint_dir, f"checkpoint-{latest_checkpoint_num}")
+        
+        # Verify that model file exists
+        model_path = os.path.join(latest_checkpoint, "model.safetensors")
+        if os.path.exists(model_path):
+            return latest_checkpoint
+        return None
+
     def train_worker(self):
         # Initialize the distributed trainer
         self.training_args = train_args
         self.training_args.output_dir = f"./results_worker_{self.worker_id}"
         self.training_args.logging_dir = f"./logs_worker_{self.worker_id}"
 
+        # Check for latest checkpoint
+        latest_checkpoint = self.find_latest_checkpoint()
+        if latest_checkpoint:
+            print(f"Found latest checkpoint at {latest_checkpoint}. Will resume training from this point.")
+        else:
+            print("No checkpoint found. Starting training from scratch.")
+
         trainer = DistributedTrainer(
             model=self.model,
             args=self.training_args,
             train_dataset=self.train_dataset,
             eval_dataset=self.eval_dataset,
-            compute_metrics=self.compute_metrics,  # Make sure this is passed
+            compute_metrics=self.compute_metrics,
             server_host=self.server_host,
             server_port=self.server_port,
             worker_id=self.worker_id,
@@ -122,7 +155,12 @@ class Worker:
 
         # Start training
         print(f"Worker {self.worker_id} starting training with evaluation...")
-        train_result = trainer.train()
+        if resume_from_checkpoint:
+            print(f"Resuming training from checkpoint: {latest_checkpoint}")
+            train_result = trainer.train(resume_from_checkpoint=latest_checkpoint)
+        else:
+            print(f"Starting training from scratch")
+            train_result = trainer.train()
         print(f"Worker {self.worker_id} training completed. Results: {train_result}")
         
         # Explicitly evaluate after training

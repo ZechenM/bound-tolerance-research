@@ -111,7 +111,8 @@ class DistributedTrainer(Trainer):
         # Ensure model is on the correct device
         model = model.to(self.device)
         model.train()
-        # print(f"inputs type: {type(inputs)}, keys: {inputs.keys() if isinstance(inputs, dict) else 'not a dict'}")
+        
+        print(f"Training Step Running - Worker {self.worker_id}")
         
         # Handle empty inputs - this should not happen if get_train_dataloader is working properly
         if not inputs or not isinstance(inputs, dict) or "pixel_values" not in inputs:
@@ -153,6 +154,52 @@ class DistributedTrainer(Trainer):
                     param.grad = avg_gradients[name].to(self.device)
 
         return loss.detach()
+
+    def train(self, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None):
+        """
+        Override the train method to force training to continue when resuming
+        """
+        print("--------------------------------")
+        print(f"Worker {self.worker_id} starting training")
+        print("--------------------------------")
+
+        # Get the original resume_from_checkpoint value
+        resume_checkpoint = resume_from_checkpoint if resume_from_checkpoint is not None else self.args.resume_from_checkpoint
+        
+        # Set a flag to track if we're resuming
+        is_resuming = resume_checkpoint is not None
+        
+        if is_resuming:
+            print(f"Worker {self.worker_id} resuming from checkpoint: {resume_checkpoint}")
+            
+            # Override the state to ensure we don't skip training
+            self.state.global_step = 0
+            
+            # Force max_steps to be higher than what's in the checkpoint
+            # This ensures training continues even if checkpoint says we're done
+            if isinstance(resume_checkpoint, str) and "checkpoint" in resume_checkpoint:
+                try:
+                    checkpoint_step = int(resume_checkpoint.split("-")[-1])
+                    print(f"Detected checkpoint step: {checkpoint_step}")
+                    # Make sure max_steps is higher than checkpoint step
+                    if self.args.max_steps <= checkpoint_step:
+                        print(f"Adjusting max_steps from {self.args.max_steps} to {checkpoint_step + 1000}")
+                        self.args.max_steps = checkpoint_step + 1000
+                except:
+                    print("Could not parse checkpoint step")
+        
+        # Call the parent's train method with our adjusted settings
+        # This will still load the checkpoint state but won't skip training
+        result = super().train(
+            resume_from_checkpoint=resume_checkpoint,
+            trial=trial,
+            ignore_keys_for_eval=ignore_keys_for_eval
+        )
+        
+        print(f"Worker {self.worker_id} training completed successfully")
+        self.print_total_network_latency()
+        
+        return result
 
     def calc_network_latency(self, is_send):
         self.network_latency_list.append(self.end_time - self.start_time)
