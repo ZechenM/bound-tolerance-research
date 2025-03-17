@@ -47,9 +47,9 @@ class Worker:
             self.device = torch.device("cuda")
             print(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
             print(f"CUDA version: {torch.version.cuda}")
-        # elif torch.backends.mps.is_available():
-        #     self.device = torch.device("mps")
-        #     print("Using MPS device")
+        elif torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+            print("Using MPS device")
         else:
             self.device = torch.device("cpu")
             print("Using CPU device")
@@ -135,7 +135,8 @@ class Worker:
         self.training_args.logging_dir = f"./logs_worker_{self.worker_id}"
 
         # Check for latest checkpoint
-        latest_checkpoint = self.find_latest_checkpoint()
+        # latest_checkpoint = self.find_latest_checkpoint()
+        latest_checkpoint = None
         if latest_checkpoint:
             print(f"Found latest checkpoint at {latest_checkpoint}. Will resume training from this point.")
         else:
@@ -161,11 +162,15 @@ class Worker:
         else:
             print(f"Starting training from scratch")
             train_result = trainer.train()
-        print(f"Worker {self.worker_id} training completed. Results: {train_result}")
+        
+        # Training completed
+        print(
+            f"Worker {self.worker_id} training DONE: {train_result}"
+        )
         
         # Explicitly evaluate after training
         eval_results = trainer.evaluate()
-        print(f"Worker {self.worker_id} final evaluation results: {eval_results}")
+        print(f"Worker {self.worker_id} evaluation DONE: {eval_results}")
         
         trainer.print_total_network_latency()
 

@@ -34,6 +34,7 @@ class DistributedTrainer(Trainer):
         self.network_latency_list = []
         self.start_time = 0
         self.end_time = 0
+        self.past_epoch = 0.0
         
         # Initialize parent class with remaining arguments
         super().__init__(*args, **kwargs)
@@ -112,7 +113,22 @@ class DistributedTrainer(Trainer):
         model = model.to(self.device)
         model.train()
         
-        print(f"Training Step Running - Worker {self.worker_id}")
+        current_epoch = self.state.epoch
+        print(f"Training Step Running - Worker {self.worker_id}, Current Epoch: {current_epoch}")
+
+        # evaluate the model at the end of each epoch
+        sent_eval = False
+        if current_epoch is not None:
+            epoch_diff = current_epoch - self.past_epoch
+            if int(current_epoch) - current_epoch < 1e-10 and epoch_diff > 0.9:
+                self.past_epoch = current_epoch
+                eval_results = self.evaluate()
+                eval_acc = eval_results['eval_accuracy']
+                curr_epoch = eval_results['epoch']
+                sent_eval = True
+                
+                print(f"Sent to server eval acc {eval_acc} at epoch {current_epoch}.")
+        
         
         # Handle empty inputs - this should not happen if get_train_dataloader is working properly
         if not inputs or not isinstance(inputs, dict) or "pixel_values" not in inputs:
@@ -139,6 +155,9 @@ class DistributedTrainer(Trainer):
 
         # Get gradients and ensure they're on CPU for communication
         gradients = {name: param.grad.cpu() for name, param in model.named_parameters() if param.grad is not None}
+        if sent_eval:
+            gradients['eval_acc'] = eval_acc 
+            gradients['epoch'] = curr_epoch
 
         # Send gradients to server and receive averaged gradients
         update, avg_gradients = self.send_recv(gradients)
@@ -153,7 +172,8 @@ class DistributedTrainer(Trainer):
                 if name in avg_gradients:
                     param.grad = avg_gradients[name].to(self.device)
 
-        return loss.detach()
+        # FIXED: ValueError: Calculated loss must be on the original device: mps:0 but device in use is cpu
+        return loss.detach().to(self.device)
 
     def train(self, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None):
         """
@@ -196,8 +216,8 @@ class DistributedTrainer(Trainer):
             ignore_keys_for_eval=ignore_keys_for_eval
         )
         
-        print(f"Worker {self.worker_id} training completed successfully")
-        self.print_total_network_latency()
+        # print(f"Worker {self.worker_id} training completed successfully")
+        # self.print_total_network_latency()
         
         return result
 
