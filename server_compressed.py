@@ -107,7 +107,7 @@ class Server:
         print(f"All worker eval acc: {self.worker_eval_acc}")
         print(f"All worker epochs: {self.worker_epochs}")
         print(f"Current averaged accuracy: {self.prev_avg_acc}")
-        print(f"Current training phase: {self.training_phase}")
+        print(f"Current training phase: {self.training_phase}\n")
 
         self.worker_eval_acc.clear()
         self.worker_epochs.clear()
