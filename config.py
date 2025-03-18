@@ -6,7 +6,7 @@ compression_mapping = {
     "no_compress": (no_compress, no_compress),
     "rle": (rle_compress, rle_decompress),
     "self_quant": (quantize_lossy_compress, quantize_lossy_decompress),
-    "baseline": (baseline_quantize, baseline_dequantize), # convert float32 to float16 and vice versa
+    "baseline": (baseline_quantize, baseline_dequantize),  # convert float32 to float16 and vice versa
 }
 
 compress, decompress = compression_mapping[compression_method]

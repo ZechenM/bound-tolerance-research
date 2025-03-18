@@ -1,9 +1,11 @@
+import asyncio
 import pickle
-import torch
 import struct
+
+import torch
+
 # from typing import Any, Dict, List, Tuple
 import config
-import asyncio
 
 print(f"Compression Method: {config.compression_method}")
 
@@ -53,9 +55,7 @@ class AsyncServer:
         # Compute the average gradients
         avg_gradients = {}
         for key in gradients[0].keys():
-            avg_gradients[key] = torch.stack([grad[key] for grad in gradients]).mean(
-                dim=0
-            )
+            avg_gradients[key] = torch.stack([grad[key] for grad in gradients]).mean(dim=0)
 
         if DEBUG_MODE:
             for param in avg_gradients:
@@ -69,10 +69,7 @@ class AsyncServer:
         avg_gradients_data = pickle.dumps(compressed_avg_gradients)
 
         # Send averaged gradients back to all workers concurrently
-        send_tasks = [
-            self.send_avg_grad(writer, avg_gradients_data)
-            for _, writer in self.connections
-        ]
+        send_tasks = [self.send_avg_grad(writer, avg_gradients_data) for _, writer in self.connections]
         await asyncio.gather(*send_tasks)
 
         # Close worker connections
@@ -118,9 +115,7 @@ class AsyncServer:
 
     async def run_server(self) -> None:
         """Start the asyncio server"""
-        server = await asyncio.start_server(
-            self.worker_connection_handler, self.host, self.port
-        )
+        server = await asyncio.start_server(self.worker_connection_handler, self.host, self.port)
         addr = server.sockets[0].getsockname()
         print(f"Server listening on {addr}...")
 

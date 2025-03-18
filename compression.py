@@ -1,10 +1,12 @@
+from typing import Any, Dict, List, Tuple
+
 import torch
-from typing import Any, Dict, List, Tuple, Set
 
 
 def no_compress(data):
     # a placeholder function for no compression
     return data
+
 
 def rle_compress(data: Dict[str, torch.Tensor]) -> Dict[str, Tuple[List[Tuple[float, int]], Any]]:
     """Compress gradients using Run-Length Encoding (RLE)."""
@@ -28,9 +30,7 @@ def rle_compress(data: Dict[str, torch.Tensor]) -> Dict[str, Tuple[List[Tuple[fl
     return compressed
 
 
-def rle_decompress(
-    compressed: Dict[str, Tuple[List[Tuple[float, int]], Any]]
-) -> Dict[str, torch.Tensor]:
+def rle_decompress(compressed: Dict[str, Tuple[List[Tuple[float, int]], Any]]) -> Dict[str, torch.Tensor]:
     """Decompress gradients using Run-Length Encoding (RLE)."""
     decompressed = {}
     for name, (runs, original_shape) in compressed.items():
@@ -58,9 +58,7 @@ def quantize_lossy_compress(gradients: dict, num_bits=8):
 
     for name, grad in gradients.items():
         min_val, max_val = grad.min(), grad.max()
-        quantized_values = torch.round(
-            (grad - min_val) / (max_val - min_val) * levels
-        ).to(torch.uint8)
+        quantized_values = torch.round((grad - min_val) / (max_val - min_val) * levels).to(torch.uint8)
 
         quantized_data[name] = {
             "min_val": min_val.item(),
@@ -87,12 +85,11 @@ def quantize_lossy_decompress(q_data: dict):
     for name, data in q_data.items():
         levels = 2 ** data["num_bits"] - 1
         quantized_values = torch.tensor(data["quantized_values"], dtype=torch.float32)
-        decompressed_values = data["min_val"] + (quantized_values / levels) * (
-            data["max_val"] - data["min_val"]
-        )
+        decompressed_values = data["min_val"] + (quantized_values / levels) * (data["max_val"] - data["min_val"])
         decompressed_data[name] = decompressed_values
 
     return decompressed_data
+
 
 # this approach won't work because all the gradients are in the range of (-1,1)
 # which all will be quantized to 0
@@ -114,7 +111,8 @@ def integerize_lossy_compress(gradients: dict):
 
     return integerized_data
 
-def baseline_quantize(gradients: dict, type: torch.dtype=torch.float16):
+
+def baseline_quantize(gradients: dict, type: torch.dtype = torch.float16):
     """
     Quantizes the gradient tensors using torch.to() method.
 
@@ -131,6 +129,7 @@ def baseline_quantize(gradients: dict, type: torch.dtype=torch.float16):
         quantized_data[name] = quantized_values
 
     return quantized_data
+
 
 def baseline_dequantize(q_data: dict):
     """
