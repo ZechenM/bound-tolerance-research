@@ -29,7 +29,7 @@ class Server:
         self.worker_eval_acc = []
         self.worker_epochs = []
         
-        self.drop_rate = 0.08  # 8% probability to zero out gradients
+        self.drop_rate = 0.2  # 20% probability to zero out gradients
         self.write_to_server_port()
         self.start_server()
         self.run_server()
@@ -47,6 +47,7 @@ class Server:
         self.server_socket.listen(self.num_workers)
         self.is_listening = True
         print(f"Server listening on {self.host}:{self.port}...")
+        print(f"Packet drop probability: {self.drop_rate}")
 
     def recv_all(self, conn, size):
         """helper function to receive all data"""
