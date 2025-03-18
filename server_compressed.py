@@ -1,3 +1,4 @@
+import random
 import pickle
 import socket
 import struct
@@ -27,6 +28,8 @@ class Server:
         self.prev_avg_acc = 0.0
         self.worker_eval_acc = []
         self.worker_epochs = []
+        
+        self.drop_rate = 0.08  # 8% probability to zero out gradients
         self.write_to_server_port()
         self.start_server()
         self.run_server()
@@ -150,9 +153,14 @@ class Server:
         if has_eval_acc:
             self._training_phase_update()
 
+        # Existing averaging logic:
         avg_gradients = {}
         for key in gradients[0].keys():
-            avg_gradients[key] = torch.stack([grad[key].float() for grad in gradients]).mean(dim=0)
+            if random.random() < self.drop_rate:  # x% probability to zero out gradients
+                avg_gradients[key] = torch.zeros_like(gradients[0][key])
+                # print(f"Gradient '{key}' zeroed out randomly.")
+            else:
+                avg_gradients[key] = torch.stack([grad[key] for grad in gradients]).mean(dim=0)
 
         # Compress the averaged gradients
         compressed_avg_gradients = compress(avg_gradients)

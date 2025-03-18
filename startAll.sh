@@ -14,6 +14,26 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Current timestamp without year
+CURRENT_TIME=$(date +"%m%d_%H%M%S")
+
+# Check for optional experiment description argument
+if [ -n "$1" ]; then
+    EXPERIMENT_DESC="_$1"
+else
+    EXPERIMENT_DESC=""
+fi
+
+# Construct LOG_DIR with optional experiment description
+LOG_DIR="${PWD}/logs/${CURRENT_TIME}${EXPERIMENT_DESC}"
+mkdir -p "${LOG_DIR}"
+SCRIPT_LOG="${LOG_DIR}/script_output.log"
+
+# Redirect all script output to log
+exec > >(tee -a "$SCRIPT_LOG") 2>&1
+
+echo "LOGS: ${LOG_DIR}"
+
 # Install required Python packages
 if [ -f "requirements.txt" ]; then
     echo "Installing required packages..."
@@ -25,31 +45,12 @@ fi
 # Remove old server port file if exists
 rm -f .server_port
 
-# In order to keep previous logs, log files will store under logs/{current_time}/
-CURRENT_TIME=$(date +"%Y%m%d_%H%M%S")
-
-LOG_DIR="${PWD}/logs/${CURRENT_TIME}"
-
-mkdir -p "${LOG_DIR}"
-
-echo "LOGS: ${LOG_DIR}"
-
-# Determine whether to use compressed or Galore versions
-if [[ "$1" == "-d" ]]; then
-    SERVER_SCRIPT="server_compressed.py"
-    WORKER_SCRIPT="worker_trainer.py"
-    SERVER_LOG="${LOG_DIR}/server_dynamic_bound_loss_log.txt"
-    WORKER0_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log0.txt"
-    WORKER1_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log1.txt"
-    WORKER2_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log2.txt"
-else
-    SERVER_SCRIPT="server_compressed.py"
-    WORKER_SCRIPT="worker_compressed.py"
-    SERVER_LOG="${LOG_DIR}/server_log.txt"
-    WORKER0_LOG="${LOG_DIR}/worker_log0.txt"
-    WORKER1_LOG="${LOG_DIR}/worker_log1.txt"
-    WORKER2_LOG="${LOG_DIR}/worker_log2.txt"
-fi
+SERVER_SCRIPT="server_compressed.py"
+WORKER_SCRIPT="worker_trainer.py"
+SERVER_LOG="${LOG_DIR}/server_dynamic_bound_loss_log.txt"
+WORKER0_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log0.txt"
+WORKER1_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log1.txt"
+WORKER2_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log2.txt"
 
 # Check if any .pkl files exist
 if ls *.pkl > /dev/null 2>&1; then
