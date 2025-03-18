@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
 
 class SimpleModel(nn.Module):
     def __init__(self):
@@ -11,9 +9,10 @@ class SimpleModel(nn.Module):
     def forward(self, x):
         x = x.view(-1, 28 * 28)  # Flatten the input
         return self.fc(x)
-    
+
     def __str__(self):
         return "SimpleModel"
+
 
 class myResNet(nn.Module):
     def __init__(self):
@@ -23,13 +22,9 @@ class myResNet(nn.Module):
         self.active1 = nn.ReLU()
 
         # Residual Unit
-        self.layer2 = nn.Conv2d(
-            in_channels=32, out_channels=32, kernel_size=3, padding="same"
-        )
+        self.layer2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, padding="same")
         self.active2 = nn.ReLU()
-        self.layer2_5 = nn.Conv2d(
-            in_channels=32, out_channels=32, kernel_size=3, padding="same"
-        )  # layer 2.5
+        self.layer2_5 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, padding="same")  # layer 2.5
 
         # Residual Unit end
         self.active_residual = nn.ReLU()

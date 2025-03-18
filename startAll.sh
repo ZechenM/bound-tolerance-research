@@ -25,14 +25,23 @@ fi
 # Remove old server port file if exists
 rm -f .server_port
 
+# In order to keep previous logs, log files will store under logs/{current_time}/
+CURRENT_TIME=$(date +"%Y%m%d_%H%M%S")
+
+LOG_DIR="${PWD}/logs/${CURRENT_TIME}"
+
+mkdir -p "${LOG_DIR}"
+
+echo "LOGS: ${LOG_DIR}"
+
 # Determine whether to use compressed or Galore versions
 if [[ "$1" == "-d" ]]; then
     SERVER_SCRIPT="server_compressed.py"
     WORKER_SCRIPT="worker_trainer.py"
-    SERVER_LOG="./logs/server_dynamic_bound_loss_log.txt"
-    WORKER0_LOG="./logs/worker_dynamic_bound_loss_log0.txt"
-    WORKER1_LOG="./logs/worker_dynamic_bound_loss_log1.txt"
-    WORKER2_LOG="./logs/worker_dynamic_bound_loss_log2.txt"
+    SERVER_LOG="${LOG_DIR}/server_dynamic_bound_loss_log.txt"
+    WORKER0_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log0.txt"
+    WORKER1_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log1.txt"
+    WORKER2_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log2.txt"
 else
     SERVER_SCRIPT="server_compressed.py"
     WORKER_SCRIPT="worker_compressed.py"
@@ -40,14 +49,7 @@ else
     WORKER0_LOG="${LOG_DIR}/worker_log0.txt"
     WORKER1_LOG="${LOG_DIR}/worker_log1.txt"
     WORKER2_LOG="${LOG_DIR}/worker_log2.txt"
-# In order to keep previous logs, log files will store under logs/{current_time}/
-CURRENT_TIME=$(date +"%Y%m%d_%H%M%S")
-
-LOG_DIR="./logs/${CURRENT_TIME}"
-
-mkdir -p "${LOG_DIR}"
-
-echo "LOGS: ${LOG_DIR}"
+fi
 
 # Check if any .pkl files exist
 if ls *.pkl > /dev/null 2>&1; then
@@ -60,7 +62,7 @@ else
 fi
 
 # Create the logs directory if it doesn't exist
-mkdir -p ./logs
+# mkdir -p ./logs
 
 # Create log files if they do not exist
 touch "$SERVER_LOG" "$WORKER0_LOG" "$WORKER1_LOG" "$WORKER2_LOG"
@@ -132,8 +134,8 @@ WORKERS_DONE=0
 WORKERS_FINISHED=()
 while [ $WORKERS_DONE -lt 3 ]; do
     for WORKER_LOG in "$WORKER0_LOG" "$WORKER1_LOG" "$WORKER2_LOG"; do
-        if [[ ! " ${WORKERS_FINISHED[@]} " =~ " $WORKER_LOG " ]] && tail -n 3 "$WORKER_LOG" | grep -q "Worker .* finished training."; then
-            # echo "Training completion detected in $WORKER_LOG:"
+        if [[ ! " ${WORKERS_FINISHED[@]} " =~ " $WORKER_LOG " ]] && tail -n 3 "$WORKER_LOG" | grep -q "Worker .* evaluation DONE."; then
+            echo "Training completion detected in $WORKER_LOG:"
             tail -n 2 "$WORKER_LOG"
             WORKERS_FINISHED+=("$WORKER_LOG")
             WORKERS_DONE=$((WORKERS_DONE + 1))
@@ -142,6 +144,6 @@ while [ $WORKERS_DONE -lt 3 ]; do
     sleep 5
 done
 
-head -n 2 "$WORKER0_LOG"
+# head -n 2 "$WORKER0_LOG"
 echo "All workers have finished training. Exiting."
 exit 0
