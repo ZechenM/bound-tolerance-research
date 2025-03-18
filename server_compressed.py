@@ -83,14 +83,20 @@ class Server:
         curr_avg_acc = sum(self.worker_eval_acc) / len(self.worker_eval_acc)
         acc_diff = curr_avg_acc - self.prev_avg_acc
 
+        proposed_phase = self.training_phase  # Initially set as current phase
+
         if any(self.worker_epochs) == 0:
-            self.training_phase = TrainingPhase.BEGIN
+            proposed_phase = TrainingPhase.BEGIN
         elif acc_diff > 0.1:
-            self.training_phase = TrainingPhase.BEGIN
-        elif acc_diff <= 0.1 and acc_diff > 0.03:
-            self.training_phase = TrainingPhase.MID
+            proposed_phase = TrainingPhase.BEGIN
+        elif 0.03 < acc_diff <= 0.1:
+            proposed_phase = TrainingPhase.MID
         else:
-            self.training_phase = TrainingPhase.FINAL
+            proposed_phase = TrainingPhase.FINAL
+
+        # Ensure one-way state transitions:
+        if proposed_phase.value >= self.training_phase.value:
+            self.training_phase = proposed_phase
 
         self.prev_avg_acc = curr_avg_acc
 
