@@ -19,7 +19,7 @@ CURRENT_TIME=$(date +"%m%d_%H%M%S")
 
 # Check for optional experiment description argument
 if [ -n "$1" ]; then
-    EXPERIMENT_DESC="_$1"
+    EXPERIMENT_DESC="-$1"
 else
     EXPERIMENT_DESC=""
 fi

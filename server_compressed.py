@@ -1,5 +1,5 @@
-import random
 import pickle
+import random
 import socket
 import struct
 from enum import Enum
@@ -19,7 +19,7 @@ class TrainingPhase(Enum):
 
 
 class Server:
-    def __init__(self, host="localhost", port=60000, num_workers=3):
+    def __init__(self, host="localhost", port=60001, num_workers=3):
         self.host = host
         self.port = port
         self.num_workers = num_workers
@@ -28,8 +28,8 @@ class Server:
         self.prev_avg_acc = 0.0
         self.worker_eval_acc = []
         self.worker_epochs = []
-        
-        self.drop_rate = 0.2  # 20% probability to zero out gradients
+
+        self.drop_rate = 0.0  # X% probability to zero out gradients
         self.write_to_server_port()
         self.start_server()
         self.run_server()
@@ -153,6 +153,14 @@ class Server:
         # check accuracy and update training phase accrodingly
         if has_eval_acc:
             self._training_phase_update()
+
+        # based on training phase, update the drop rate
+        if self.training_phase == TrainingPhase.BEGIN:
+            self.drop_rate = 0.0
+        elif self.training_phase == TrainingPhase.MID:
+            self.drop_rate = 0.0
+        elif self.training_phase == TrainingPhase.FINAL:
+            self.drop_rate = 0.4
 
         # Existing averaging logic:
         avg_gradients = {}
