@@ -17,15 +17,23 @@ fi
 # Current timestamp without year
 CURRENT_TIME=$(date +"%m%d_%H%M%S")
 
-# Check for optional experiment description argument
+# Check for optional data description argument
 if [ -n "$1" ]; then
-    EXPERIMENT_DESC="-$1"
+    DATA_DESC="$1"
+else
+    DATA_DESC="."  # You can set a default value or leave it empty
+fi
+
+# Check for optional experiment description argument
+if [ -n "$2" ]; then
+    EXPERIMENT_DESC="$2"
 else
     EXPERIMENT_DESC=""
 fi
 
-# Construct LOG_DIR with optional experiment description
-LOG_DIR="${PWD}/logs/${CURRENT_TIME}${EXPERIMENT_DESC}"
+# Construct LOG_DIR with optional data and experiment descriptions
+LOG_DIR="${PWD}/logs/${CURRENT_TIME}/${DATA_DESC}/${EXPERIMENT_DESC}"
+
 mkdir -p "${LOG_DIR}"
 SCRIPT_LOG="${LOG_DIR}/script_output.log"
 

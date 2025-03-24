@@ -29,7 +29,7 @@ class Server:
         self.worker_eval_acc = []
         self.worker_epochs = []
 
-        self.drop_rate = 0.0  # X% probability to zero out gradients
+        self.drop_rate = 0.40  # X% probability to zero out gradients
         self.write_to_server_port()
         self.start_server()
         self.run_server()
@@ -156,11 +156,11 @@ class Server:
 
         # based on training phase, update the drop rate
         if self.training_phase == TrainingPhase.BEGIN:
-            self.drop_rate = 0.0
+            self.drop_rate = 0.4
         elif self.training_phase == TrainingPhase.MID:
             self.drop_rate = 0.0
         elif self.training_phase == TrainingPhase.FINAL:
-            self.drop_rate = 0.4
+            self.drop_rate = 0.0
 
         # Existing averaging logic:
         avg_gradients = {}

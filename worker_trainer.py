@@ -29,13 +29,13 @@ train_args = TrainingArguments(
     dataloader_pin_memory=True,  # Enable pin_memory for faster data transfer to GPU
     report_to="none",
     logging_first_step=True,  # Log metrics for the first step
-    save_total_limit=1,  # Only keep one checkpoint
+    save_total_limit=5,  # Only keep n checkpoint
     # fp8=True,
 )
 
 
 class Worker:
-    def __init__(self, worker_id, host="localhost", port=65432):
+    def __init__(self, worker_id, host="localhost", port=60001):
         self.worker_id = worker_id
         self.server_host = host
         self.server_port = port
