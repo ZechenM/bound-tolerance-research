@@ -14,10 +14,10 @@ from transformers import TrainingArguments
 from distributed_trainer import DistributedTrainer
 from my_datasets import CIFAR10Dataset
 
-resume_from_checkpoint = True
+resume_from_checkpoint = False
 
 train_args = TrainingArguments(
-    num_train_epochs=15,
+    num_train_epochs=8,
     per_device_train_batch_size=16,
     per_device_eval_batch_size=16,
     weight_decay=0.01,
@@ -29,12 +29,13 @@ train_args = TrainingArguments(
     dataloader_pin_memory=True,  # Enable pin_memory for faster data transfer to GPU
     report_to="none",
     logging_first_step=True,  # Log metrics for the first step
+    save_total_limit=5,  # Only keep n checkpoint
     # fp8=True,
 )
 
 
 class Worker:
-    def __init__(self, worker_id, host="localhost", port=65432):
+    def __init__(self, worker_id, host="localhost", port=60001):
         self.worker_id = worker_id
         self.server_host = host
         self.server_port = port
@@ -188,7 +189,7 @@ def main():
     worker_id = int(sys.argv[1])
 
     # Parse port argument if provided
-    port = 60000  # default port
+    port = 60001  # default port
     if len(sys.argv) > 2 and sys.argv[2] == "--port":
         if len(sys.argv) > 3:
             port = int(sys.argv[3])

@@ -179,3 +179,5 @@ cython_debug/
 /results_worker_1
 /results_worker_2
 *.pkl
+.DS_Store
+.server_port

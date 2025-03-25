@@ -1,4 +1,5 @@
 import pickle
+import random
 import socket
 import struct
 from enum import Enum
@@ -18,7 +19,7 @@ class TrainingPhase(Enum):
 
 
 class Server:
-    def __init__(self, host="localhost", port=60000, num_workers=3):
+    def __init__(self, host="localhost", port=60001, num_workers=3):
         self.host = host
         self.port = port
         self.num_workers = num_workers
@@ -27,6 +28,8 @@ class Server:
         self.prev_avg_acc = 0.0
         self.worker_eval_acc = []
         self.worker_epochs = []
+
+        self.drop_rate = 0.40  # X% probability to zero out gradients
         self.write_to_server_port()
         self.start_server()
         self.run_server()
@@ -44,6 +47,7 @@ class Server:
         self.server_socket.listen(self.num_workers)
         self.is_listening = True
         print(f"Server listening on {self.host}:{self.port}...")
+        print(f"Packet drop probability: {self.drop_rate}")
 
     def recv_all(self, conn, size):
         """helper function to receive all data"""
@@ -83,21 +87,27 @@ class Server:
         curr_avg_acc = sum(self.worker_eval_acc) / len(self.worker_eval_acc)
         acc_diff = curr_avg_acc - self.prev_avg_acc
 
+        proposed_phase = self.training_phase  # Initially set as current phase
+
         if any(self.worker_epochs) == 0:
-            self.training_phase = TrainingPhase.BEGIN
+            proposed_phase = TrainingPhase.BEGIN
         elif acc_diff > 0.1:
-            self.training_phase = TrainingPhase.BEGIN
-        elif acc_diff <= 0.1 and acc_diff > 0.03:
-            self.training_phase = TrainingPhase.MID
+            proposed_phase = TrainingPhase.BEGIN
+        elif 0.03 < acc_diff <= 0.1:
+            proposed_phase = TrainingPhase.MID
         else:
-            self.training_phase = TrainingPhase.FINAL
+            proposed_phase = TrainingPhase.FINAL
+
+        # Ensure one-way state transitions:
+        if proposed_phase.value >= self.training_phase.value:
+            self.training_phase = proposed_phase
 
         self.prev_avg_acc = curr_avg_acc
 
         print(f"All worker eval acc: {self.worker_eval_acc}")
         print(f"All worker epochs: {self.worker_epochs}")
         print(f"Current averaged accuracy: {self.prev_avg_acc}")
-        print(f"Current training phase: {self.training_phase}")
+        print(f"Current training phase: {self.training_phase}\n")
 
         self.worker_eval_acc.clear()
         self.worker_epochs.clear()
@@ -144,9 +154,22 @@ class Server:
         if has_eval_acc:
             self._training_phase_update()
 
+        # based on training phase, update the drop rate
+        if self.training_phase == TrainingPhase.BEGIN:
+            self.drop_rate = 0.4
+        elif self.training_phase == TrainingPhase.MID:
+            self.drop_rate = 0.0
+        elif self.training_phase == TrainingPhase.FINAL:
+            self.drop_rate = 0.0
+
+        # Existing averaging logic:
         avg_gradients = {}
         for key in gradients[0].keys():
-            avg_gradients[key] = torch.stack([grad[key].float() for grad in gradients]).mean(dim=0)
+            if random.random() < self.drop_rate:  # x% probability to zero out gradients
+                avg_gradients[key] = torch.zeros_like(gradients[0][key])
+                # print(f"Gradient '{key}' zeroed out randomly.")
+            else:
+                avg_gradients[key] = torch.stack([grad[key] for grad in gradients]).mean(dim=0)
 
         # Compress the averaged gradients
         compressed_avg_gradients = compress(avg_gradients)
