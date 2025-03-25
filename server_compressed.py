@@ -33,6 +33,11 @@ class Server:
         self.write_to_server_port()
         self.start_server()
         self.run_server()
+        self.enable_v_threshold = False
+        self.v = random.random()  # random value, this will be updated soon
+        self.update_v_per = 100   # update v per 100 iter 
+        self.AIDM_add = 0.1       # under-dropped, v = v + self.AIDM_add
+        self.AIMD_decrease = 0.5  # over-dropped, v = v * self.AIMD_decrease
         # Thread(target=self.handle_user_input, daemon=True).start()
 
     def write_to_server_port(self):
@@ -162,14 +167,17 @@ class Server:
         elif self.training_phase == TrainingPhase.FINAL:
             self.drop_rate = 0.0
 
-        # Existing averaging logic:
-        avg_gradients = {}
-        for key in gradients[0].keys():
-            if random.random() < self.drop_rate:  # x% probability to zero out gradients
-                avg_gradients[key] = torch.zeros_like(gradients[0][key])
-                # print(f"Gradient '{key}' zeroed out randomly.")
-            else:
-                avg_gradients[key] = torch.stack([grad[key] for grad in gradients]).mean(dim=0)
+        if not self.enable_v_threshold:
+            # Existing averaging logic:
+            avg_gradients = {}
+            for key in gradients[0].keys():
+                if random.random() < self.drop_rate:  # x% probability to zero out gradients
+                    avg_gradients[key] = torch.zeros_like(gradients[0][key])
+                    # print(f"Gradient '{key}' zeroed out randomly.")
+                else:
+                    avg_gradients[key] = torch.stack([grad[key] for grad in gradients]).mean(dim=0)
+        else:  # v-threshold is enabled
+            pass  # TODO
 
         # Compress the averaged gradients
         compressed_avg_gradients = compress(avg_gradients)
