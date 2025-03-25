@@ -30,14 +30,18 @@ class Server:
         self.worker_epochs = []
 
         self.drop_rate = 0.40  # X% probability to zero out gradients
-        self.write_to_server_port()
-        self.start_server()
-        self.run_server()
-        self.enable_v_threshold = False
-        self.v = random.random()  # random value, this will be updated soon
+        self.enable_v_threshold = True
+        self.v = 0                # just like TCP, start with 0, update additively
+        self.iter_count = 0       # increment every iter processed. If reached self.update_v_per, clear, and update v accordingly
         self.update_v_per = 100   # update v per 100 iter 
         self.AIDM_add = 0.1       # under-dropped, v = v + self.AIDM_add
         self.AIMD_decrease = 0.5  # over-dropped, v = v * self.AIMD_decrease
+        self.overall_max_abs_value = 0
+        self.total_params = 0
+        self.zeroed_params = 0
+        self.write_to_server_port()
+        self.start_server()
+        self.run_server()
         # Thread(target=self.handle_user_input, daemon=True).start()
 
     def write_to_server_port(self):
@@ -167,9 +171,13 @@ class Server:
         elif self.training_phase == TrainingPhase.FINAL:
             self.drop_rate = 0.0
 
+        # print(f"1. type of gradients: {type(gradients)}, should be list")
+        # print(f"2. len of gradients: {len(gradients)}, should be 3")
+        # print(f"3. type of gradients[0]: {type(gradients[0])}, should be dict")
+        # print("gradients looks like:", gradients)
+        avg_gradients = {}
         if not self.enable_v_threshold:
             # Existing averaging logic:
-            avg_gradients = {}
             for key in gradients[0].keys():
                 if random.random() < self.drop_rate:  # x% probability to zero out gradients
                     avg_gradients[key] = torch.zeros_like(gradients[0][key])
@@ -177,8 +185,42 @@ class Server:
                 else:
                     avg_gradients[key] = torch.stack([grad[key] for grad in gradients]).mean(dim=0)
         else:  # v-threshold is enabled
-            pass  # TODO
+            for grad_dict in gradients:
+                for key in grad_dict:
+                    tensor = grad_dict[key]
+                    
+                    # Update max absolute value
+                    self.overall_max_abs_value = max(self.overall_max_abs_value, tensor.abs().max().item())
 
+                    # Count parameters
+                    self.total_params += tensor.numel()
+
+                    # Zero out small values
+                    mask = tensor.abs() < self.v
+                    self.zeroed_params += mask.sum().item()
+                    tensor[mask] = 0  # In-place modification
+            
+            # right gradients are set to 0 in-place, calculate average
+            for key in gradients[0].keys():
+                avg_gradients[key] = torch.stack([grad[key] for grad in gradients]).mean(dim=0)
+
+            self.iter_count += 1
+            if self.iter_count >= self.update_v_per:
+                # clear, and update v accordingly
+                self.iter_count = 0
+                actual_drop_rate = self.zeroed_params / self.total_params
+                if actual_drop_rate < self.drop_rate:
+                    # increase v, zero more gradients, increase drop rate
+                    self.v += self.overall_max_abs_value * 0.0001  # see https://github.com/ZechenM/bound-tolerance-research/issues/9
+
+                else:  # actual_drop_rate >= self.drop_rate
+                    # decrease v, allow more grdients to get passed, decrease drop rate
+                    self.v *= self.AIMD_decrease
+                self.overall_max_abs_value = 0
+                self.total_params = 0
+                self.zeroed_params = 0
+            
+            print(f"current v: {self.v}, iter_count {self.iter_count}, zeroed_param {self.zeroed_params}, total params: {self.total_params}")  # TODO: Delete this before merge
         # Compress the averaged gradients
         compressed_avg_gradients = compress(avg_gradients)
         avg_gradients_data = pickle.dumps(compressed_avg_gradients)
