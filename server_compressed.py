@@ -37,6 +37,8 @@ class Server:
         self.AIDM_add = 0.1       # under-dropped, v = v + self.AIDM_add
         self.AIMD_decrease = 0.5  # over-dropped, v = v * self.AIMD_decrease
         self.overall_max_abs_value = 0
+        self.median_tracker = 0
+        self.counter = 0
         self.total_params = 0
         self.zeroed_params = 0
         self.write_to_server_port()
@@ -190,7 +192,9 @@ class Server:
                     tensor = grad_dict[key]
                     
                     # Update max absolute value
-                    self.overall_max_abs_value = max(self.overall_max_abs_value, tensor.abs().max().item())
+                    # self.overall_max_abs_value = max(self.overall_max_abs_value, tensor.abs().max().item())
+                    self.median_tracker += tensor.median().item()
+                    self.counter += 1
 
                     # Count parameters
                     self.total_params += tensor.numel()
@@ -204,6 +208,13 @@ class Server:
             for key in gradients[0].keys():
                 avg_gradients[key] = torch.stack([grad[key] for grad in gradients]).mean(dim=0)
 
+            print(f"current v: {self.v}", 
+                  f"iter_count {self.iter_count}",
+                  f"zeroed_param {self.zeroed_params}",
+                  f"total params: {self.total_params}",
+                  f"drop rate: {self.zeroed_params / self.total_params}", 
+                  flush=True)
+
             self.iter_count += 1
             if self.iter_count >= self.update_v_per:
                 # clear, and update v accordingly
@@ -211,7 +222,10 @@ class Server:
                 actual_drop_rate = self.zeroed_params / self.total_params
                 if actual_drop_rate < self.drop_rate:
                     # increase v, zero more gradients, increase drop rate
-                    self.v += self.overall_max_abs_value * 0.0001  # see https://github.com/ZechenM/bound-tolerance-research/issues/9
+                    # see https://github.com/ZechenM/bound-tolerance-research/issues/9
+                    # self.v += self.overall_max_abs_value * 0.0001 
+                    real_median = self.median_tracker / self.counter
+                    self.v += abs(real_median) * 0.5
 
                 else:  # actual_drop_rate >= self.drop_rate
                     # decrease v, allow more grdients to get passed, decrease drop rate
@@ -220,7 +234,6 @@ class Server:
                 self.total_params = 0
                 self.zeroed_params = 0
             
-            print(f"current v: {self.v}, iter_count {self.iter_count}, zeroed_param {self.zeroed_params}, total params: {self.total_params}")  # TODO: Delete this before merge
         # Compress the averaged gradients
         compressed_avg_gradients = compress(avg_gradients)
         avg_gradients_data = pickle.dumps(compressed_avg_gradients)
