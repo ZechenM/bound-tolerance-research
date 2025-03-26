@@ -30,12 +30,15 @@ class Server:
         self.worker_epochs = []
 
         self.drop_rate = 0.40  # X% probability to zero out gradients
+        self.drop_rate = 0.00  # X% probability to zero out gradients
+        print(f"server starting at port {port}")
         self.write_to_server_port()
         self.start_server()
         self.run_server()
         # Thread(target=self.handle_user_input, daemon=True).start()
 
     def write_to_server_port(self):
+        print("Writing server port to .server_port file...")
         with open(".server_port", "w") as f:
             f.write(str(self.port))
             f.flush()
@@ -156,7 +159,7 @@ class Server:
 
         # based on training phase, update the drop rate
         if self.training_phase == TrainingPhase.BEGIN:
-            self.drop_rate = 0.4
+            self.drop_rate = 0.0
         elif self.training_phase == TrainingPhase.MID:
             self.drop_rate = 0.0
         elif self.training_phase == TrainingPhase.FINAL:
@@ -218,4 +221,5 @@ class Server:
 
 
 if __name__ == "__main__":
+    print("Starting server...")
     server = Server()

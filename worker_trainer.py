@@ -14,22 +14,22 @@ from transformers import TrainingArguments
 from distributed_trainer import DistributedTrainer
 from my_datasets import CIFAR10Dataset
 
-resume_from_checkpoint = False
+resume_from_checkpoint = True
 
 train_args = TrainingArguments(
-    num_train_epochs=8,
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=16,
+    num_train_epochs=3,
+    per_device_train_batch_size=4,
+    per_device_eval_batch_size=4,
     weight_decay=0.01,
     learning_rate=0.001,
     logging_steps=10,
     save_strategy="epoch",
     eval_strategy="epoch",
-    load_best_model_at_end=True,
+    save_total_limit=1,
+    load_best_model_at_end=False,
     dataloader_pin_memory=True,  # Enable pin_memory for faster data transfer to GPU
     report_to="none",
     logging_first_step=True,  # Log metrics for the first step
-    save_total_limit=5,  # Only keep n checkpoint
     # fp8=True,
 )
 
@@ -39,6 +39,7 @@ class Worker:
         self.worker_id = worker_id
         self.server_host = host
         self.server_port = port
+        print(f"Worker {self.worker_id} connecting to server at {self.server_host}:{self.server_port}")
 
         # Set up device
         if torch.cuda.is_available():
@@ -53,10 +54,11 @@ class Worker:
             print("Using CPU device")
 
         # Load untrained EfficientNetB0 model
-        self.model = models.efficientnet_b0(weights=None)
+        # self.model = models.efficientnet_b0(weights=None)
+        self.model = models.densenet169(weights=None)
         # Modify the model's classifier to output 10 classes (CIFAR10)
-        in_features = self.model.classifier[1].in_features
-        self.model.classifier[1] = nn.Linear(in_features, 10)
+        in_features = self.model.classifier.in_features
+        self.model.classifier = nn.Linear(in_features, 10)
         self.model = self.model.to(self.device)
         print(f"Model moved to {self.device}")
 
@@ -137,8 +139,8 @@ class Worker:
         self.training_args.logging_dir = f"./logs_worker_{self.worker_id}"
 
         # Check for latest checkpoint
-        # latest_checkpoint = self.find_latest_checkpoint()
-        latest_checkpoint = None
+        latest_checkpoint = self.find_latest_checkpoint()
+        # latest_checkpoint = None
         if latest_checkpoint:
             print(f"Found latest checkpoint at {latest_checkpoint}. Will resume training from this point.")
         else:
@@ -169,8 +171,8 @@ class Worker:
         print(f"Worker {self.worker_id} training DONE: {train_result}")
 
         # Explicitly evaluate after training
-        eval_results = trainer.evaluate()
-        print(f"Worker {self.worker_id} evaluation DONE: {eval_results}")
+        # eval_results = trainer.evaluate()
+        # print(f"Worker {self.worker_id} evaluation DONE: {eval_results}")
 
         trainer.print_total_network_latency()
 

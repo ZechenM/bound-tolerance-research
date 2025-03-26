@@ -203,8 +203,8 @@ class DistributedTrainer(Trainer):
                     print(f"Detected checkpoint step: {checkpoint_step}")
                     # Make sure max_steps is higher than checkpoint step
                     if self.args.max_steps <= checkpoint_step:
-                        print(f"Adjusting max_steps from {self.args.max_steps} to {checkpoint_step + 1000}")
-                        self.args.max_steps = checkpoint_step + 1000
+                        print(f"Adjusting max_steps from {self.args.max_steps} to {checkpoint_step + 5982}")
+                        self.args.max_steps = checkpoint_step + 5982 # should be double if I want to do 2 time more epoch
                 except:
                     print("Could not parse checkpoint step")
 
