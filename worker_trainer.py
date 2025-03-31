@@ -14,12 +14,12 @@ from transformers import TrainingArguments
 from distributed_trainer import DistributedTrainer
 from my_datasets import CIFAR10Dataset
 
-resume_from_checkpoint = True
+resume_from_checkpoint = False
 
 train_args = TrainingArguments(
-    num_train_epochs=3,
-    per_device_train_batch_size=4,
-    per_device_eval_batch_size=4,
+    num_train_epochs=10,
+    per_device_train_batch_size=32,
+    per_device_eval_batch_size=32,
     weight_decay=0.01,
     learning_rate=0.001,
     logging_steps=10,
@@ -35,7 +35,7 @@ train_args = TrainingArguments(
 
 
 class Worker:
-    def __init__(self, worker_id, host="localhost", port=60001):
+    def __init__(self, worker_id, port, host="localhost"):
         self.worker_id = worker_id
         self.server_host = host
         self.server_port = port
@@ -53,8 +53,11 @@ class Worker:
             self.device = torch.device("cpu")
             print("Using CPU device")
 
-        # Load untrained EfficientNetB0 model
+        # # Load untrained EfficientNetB0 model
         # self.model = models.efficientnet_b0(weights=None)
+
+        
+        # Load denseNet169 model
         self.model = models.densenet169(weights=None)
         # Modify the model's classifier to output 10 classes (CIFAR10)
         in_features = self.model.classifier.in_features
@@ -171,16 +174,16 @@ class Worker:
         print(f"Worker {self.worker_id} training DONE: {train_result}")
 
         # Explicitly evaluate after training
-        # eval_results = trainer.evaluate()
-        # print(f"Worker {self.worker_id} evaluation DONE: {eval_results}")
+        eval_results = trainer.evaluate()
+        print(f"Worker {self.worker_id} evaluation DONE: {eval_results}")
 
         trainer.print_total_network_latency()
 
 
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 3:
         print("Invalid usage.")
-        print("USAGE: python worker_trainer.py <WORKER_ID> [--port PORT]")
+        print("USAGE: python worker_trainer.py <WORKER_ID> <SERVER_PORT>")
         sys.exit(1)
 
     # Set random seed for reproducibility
@@ -189,15 +192,7 @@ def main():
     np.random.seed(42)
 
     worker_id = int(sys.argv[1])
-
-    # Parse port argument if provided
-    port = 60001  # default port
-    if len(sys.argv) > 2 and sys.argv[2] == "--port":
-        if len(sys.argv) > 3:
-            port = int(sys.argv[3])
-        else:
-            print("Error: --port requires a port number")
-            sys.exit(1)
+    port = int(sys.argv[2])  
 
     worker = Worker(worker_id, port=port)
     worker.train_worker()

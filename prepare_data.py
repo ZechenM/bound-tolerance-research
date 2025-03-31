@@ -92,7 +92,7 @@ def prepare_mnist_test_data():
     return DataLoader(mnist_dataset, batch_size=64, shuffle=True)
 
 
-def prepare_cifar10_data(total_samples=None, samples_per_class=600):
+def prepare_cifar10_data(total_samples=None, samples_per_class=300):
     """
     Prepare CIFAR-10 dataset for distributed training with EfficientNetB0
     Args:
@@ -119,15 +119,17 @@ def prepare_cifar10_data(total_samples=None, samples_per_class=600):
 
     # Load CIFAR-10 dataset
     dataset = datasets.CIFAR10(root=DATA_DIR, train=True, download=True, transform=transform)
+    print(len(dataset))
 
     # Select a subset of samples if specified
     if total_samples is not None:
+        print(f"Selecting a random subset of {total_samples} samples...")
         indices = torch.randperm(len(dataset))[:total_samples]
         dataset = Subset(dataset, indices)
 
     print(f"CIFAR-10 dataset LOADED with {len(dataset)} samples")
 
-    # Select exactly 600 samples per class
+    # Select exactly {samples_per_class} samples per class
     class_counts = {i: 0 for i in range(10)}
     selected_indices = []
 
@@ -188,7 +190,7 @@ if __name__ == "__main__":
         case "mnist":
             mnist_train_test_split()
         case "cifar10":
-            # Prepare CIFAR-10 data for EfficientNetB0
-            prepare_cifar10_data(30000, 3000)  # 1000 samples per worker
+            # Prepare CIFAR-10 data for EfficientNetB0 / DenseNet
+            prepare_cifar10_data(50000, 1200)  # 1200 samples per class
         case "cifar100":
             prepare_cifar100_data()
