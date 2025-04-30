@@ -209,7 +209,7 @@ class Server:
 
                     # Update max absolute value
                     # self.overall_max_abs_value = max(self.overall_max_abs_value, tensor.abs().max().item())
-                    self.median_tracker += tensor.median().item()
+                    self.median_tracker += tensor.mean().item()
                     self.counter += 1
 
                     # Count parameters
