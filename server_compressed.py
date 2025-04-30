@@ -1,3 +1,4 @@
+import argparse
 import pickle
 import random
 import socket
@@ -19,7 +20,7 @@ class TrainingPhase(Enum):
 
 
 class Server:
-    def __init__(self, host="localhost", port=60001, num_workers=3):
+    def __init__(self, port, host="localhost", num_workers=3):
         self.host = host
         self.port = port
         self.num_workers = num_workers
@@ -29,10 +30,10 @@ class Server:
         self.worker_eval_acc = []
         self.worker_epochs = []
 
-        self.drop_rate = 0.40  # X% probability to zero out gradients
+        self.drop_rate = 0.8  # X% probability to zero out gradients
 
         # v-threshold configurations and trackers
-        self.enable_v_threshold = True
+        self.enable_v_threshold = False
         self.v = 0  # just like TCP, start with 0, update additively
         self.iter_count = 0  # increment every iter processed. If reached self.update_v_per, clear, and update v accordingly
         self.update_v_per = 100  # update v per 100 iter
@@ -50,6 +51,7 @@ class Server:
         # Thread(target=self.handle_user_input, daemon=True).start()
 
     def write_to_server_port(self):
+        print("Writing server port to .server_port file...")
         with open(".server_port", "w") as f:
             f.write(str(self.port))
             f.flush()
@@ -61,7 +63,8 @@ class Server:
         self.server_socket.listen(self.num_workers)
         self.is_listening = True
         print(f"Server listening on {self.host}:{self.port}...")
-        print(f"Packet drop probability: {self.drop_rate}")
+        
+        print(f"V-threshold enabled: {self.enable_v_threshold}")
 
     def recv_all(self, conn, size):
         """helper function to receive all data"""
@@ -96,6 +99,7 @@ class Server:
 
     def _training_phase_update(self):
         if len(self.worker_eval_acc) < 3:
+            self.has_eval_acc = False
             return
 
         curr_avg_acc = sum(self.worker_eval_acc) / len(self.worker_eval_acc)
@@ -105,31 +109,37 @@ class Server:
 
         if any(self.worker_epochs) == 0:
             proposed_phase = TrainingPhase.BEGIN
-        elif acc_diff > 0.1:
+        elif acc_diff > 0.07:
             proposed_phase = TrainingPhase.BEGIN
-        elif 0.03 < acc_diff <= 0.1:
-            proposed_phase = TrainingPhase.MID
+        elif curr_avg_acc > 0.5:
+            if acc_diff < 0.03:
+                proposed_phase = TrainingPhase.FINAL
+            elif acc_diff <= 0.07:
+                proposed_phase = TrainingPhase.MID
+            else:
+                proposed_phase = TrainingPhase.BEGIN
+        # Ensure no phase transitions if the accuracy is not above 50%, even if acc_diff is low
         else:
-            proposed_phase = TrainingPhase.FINAL
+            proposed_phase = TrainingPhase.BEGIN
 
         # Ensure one-way state transitions:
         if proposed_phase.value >= self.training_phase.value:
             self.training_phase = proposed_phase
 
         self.prev_avg_acc = curr_avg_acc
-
+        
         print(f"All worker eval acc: {self.worker_eval_acc}")
         print(f"All worker epochs: {self.worker_epochs}")
         print(f"Current averaged accuracy: {self.prev_avg_acc}")
-        print(f"Current training phase: {self.training_phase}\n")
-
+        print(f"Current training phase: {self.training_phase}")
+        
         self.worker_eval_acc.clear()
         self.worker_epochs.clear()
 
     def recv_send(self):
         """Receive gradients from all workers and send back averaged gradients"""
         gradients = []
-        has_eval_acc = False
+        self.has_eval_acc = False
 
         for conn in self.connections:
             # Receive the size of the incoming data
@@ -152,7 +162,7 @@ class Server:
             grad = decompress(compressed_grad)
 
             if "eval_acc" in grad:
-                has_eval_acc = True
+                self.has_eval_acc = True
                 self.worker_eval_acc.append(grad["eval_acc"])
                 self.worker_epochs.append(grad["epoch"])
                 del grad["epoch"]
@@ -165,16 +175,19 @@ class Server:
         # print("All gradients received.")
 
         # check accuracy and update training phase accrodingly
-        if has_eval_acc:
+        if self.has_eval_acc:
             self._training_phase_update()
 
         # based on training phase, update the drop rate
         if self.training_phase == TrainingPhase.BEGIN:
-            self.drop_rate = 0.4
+            self.drop_rate = 0.8
         elif self.training_phase == TrainingPhase.MID:
             self.drop_rate = 0.0
         elif self.training_phase == TrainingPhase.FINAL:
             self.drop_rate = 0.0
+            
+        if self.has_eval_acc:
+            print(f"Current drop rate: {self.drop_rate}\n")
 
         # print(f"1. type of gradients: {type(gradients)}, should be list")
         # print(f"2. len of gradients: {len(gradients)}, should be 3")
@@ -286,4 +299,10 @@ class Server:
 
 
 if __name__ == "__main__":
-    server = Server()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=str, default="60001")
+    args = parser.parse_args()
+    
+    server_port = int(args.port)
+    print(f"Starting server at port with {server_port}...")
+    server = Server(server_port)

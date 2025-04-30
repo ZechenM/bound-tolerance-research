@@ -17,28 +17,29 @@ from my_datasets import CIFAR10Dataset
 resume_from_checkpoint = False
 
 train_args = TrainingArguments(
-    num_train_epochs=8,
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=16,
+    num_train_epochs=10,
+    per_device_train_batch_size=32,
+    per_device_eval_batch_size=32,
     weight_decay=0.01,
     learning_rate=0.001,
     logging_steps=10,
     save_strategy="epoch",
     eval_strategy="epoch",
-    load_best_model_at_end=True,
+    save_total_limit=1,
+    load_best_model_at_end=False,
     dataloader_pin_memory=True,  # Enable pin_memory for faster data transfer to GPU
     report_to="none",
     logging_first_step=True,  # Log metrics for the first step
-    save_total_limit=5,  # Only keep n checkpoint
     # fp8=True,
 )
 
 
 class Worker:
-    def __init__(self, worker_id, host="localhost", port=60001):
+    def __init__(self, worker_id, port, host="localhost"):
         self.worker_id = worker_id
         self.server_host = host
         self.server_port = port
+        print(f"Worker {self.worker_id} connecting to server at {self.server_host}:{self.server_port}")
 
         # Set up device
         if torch.cuda.is_available():
@@ -52,11 +53,15 @@ class Worker:
             self.device = torch.device("cpu")
             print("Using CPU device")
 
-        # Load untrained EfficientNetB0 model
-        self.model = models.efficientnet_b0(weights=None)
+        # # Load untrained EfficientNetB0 model
+        # self.model = models.efficientnet_b0(weights=None)
+
+        
+        # Load denseNet169 model
+        self.model = models.densenet169(weights=None)
         # Modify the model's classifier to output 10 classes (CIFAR10)
-        in_features = self.model.classifier[1].in_features
-        self.model.classifier[1] = nn.Linear(in_features, 10)
+        in_features = self.model.classifier.in_features
+        self.model.classifier = nn.Linear(in_features, 10)
         self.model = self.model.to(self.device)
         print(f"Model moved to {self.device}")
 
@@ -137,8 +142,8 @@ class Worker:
         self.training_args.logging_dir = f"./logs_worker_{self.worker_id}"
 
         # Check for latest checkpoint
-        # latest_checkpoint = self.find_latest_checkpoint()
-        latest_checkpoint = None
+        latest_checkpoint = self.find_latest_checkpoint()
+        # latest_checkpoint = None
         if latest_checkpoint:
             print(f"Found latest checkpoint at {latest_checkpoint}. Will resume training from this point.")
         else:
@@ -176,9 +181,9 @@ class Worker:
 
 
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 3:
         print("Invalid usage.")
-        print("USAGE: python worker_trainer.py <WORKER_ID> [--port PORT]")
+        print("USAGE: python worker_trainer.py <WORKER_ID> <SERVER_PORT>")
         sys.exit(1)
 
     # Set random seed for reproducibility
@@ -187,15 +192,7 @@ def main():
     np.random.seed(42)
 
     worker_id = int(sys.argv[1])
-
-    # Parse port argument if provided
-    port = 60001  # default port
-    if len(sys.argv) > 2 and sys.argv[2] == "--port":
-        if len(sys.argv) > 3:
-            port = int(sys.argv[3])
-        else:
-            print("Error: --port requires a port number")
-            sys.exit(1)
+    port = int(sys.argv[2])  
 
     worker = Worker(worker_id, port=port)
     worker.train_worker()

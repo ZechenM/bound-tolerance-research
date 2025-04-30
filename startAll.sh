@@ -31,8 +31,15 @@ else
     EXPERIMENT_DESC=""
 fi
 
+# Check for optional server port argument
+if [ -n "$3" ]; then
+    CLA_SERVER_PORT="$3"
+else
+    CLA_SERVER_PORT="60001"  # Default port, change as needed
+fi
+
 # Construct LOG_DIR with optional data and experiment descriptions
-LOG_DIR="${PWD}/logs/${CURRENT_TIME}/${DATA_DESC}/${EXPERIMENT_DESC}"
+LOG_DIR="${PWD}/logs/${DATA_DESC}/${EXPERIMENT_DESC}/${CURRENT_TIME}"
 
 mkdir -p "${LOG_DIR}"
 SCRIPT_LOG="${LOG_DIR}/script_output.log"
@@ -42,13 +49,13 @@ exec > >(tee -a "$SCRIPT_LOG") 2>&1
 
 echo "LOGS: ${LOG_DIR}"
 
-# Install required Python packages
-if [ -f "requirements.txt" ]; then
-    echo "Installing required packages..."
-    pip install --quiet -r requirements.txt
-else
-    echo "requirements.txt not found. Skipping package installation."
-fi
+# # Install required Python packages
+# if [ -f "requirements.txt" ]; then
+#     echo "Installing required packages..."
+#     pip install --quiet -r requirements.txt
+# else
+#     echo "requirements.txt not found. Skipping package installation."
+# fi
 
 # Remove old server port file if exists
 rm -f .server_port
@@ -60,15 +67,15 @@ WORKER0_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log0.txt"
 WORKER1_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log1.txt"
 WORKER2_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log2.txt"
 
-# Check if any .pkl files exist
-if ls *.pkl > /dev/null 2>&1; then
-    echo ".pkl files found."
-else
-    echo "No .pkl files found. Generating necessary pre-train data"
-    python ./prepare_data.py
-    echo "Pre-training data generated. Please re-run the script."
-    exit 1
-fi
+# # Check if any .pkl files exist
+# if ls *.pkl > /dev/null 2>&1; then
+#     echo ".pkl files found."
+# else
+#     echo "No .pkl files found. Generating necessary pre-train data"
+#     python ./prepare_data.py
+#     echo "Pre-training data generated. Please re-run the script."
+#     exit 1
+# fi
 
 # Create the logs directory if it doesn't exist
 # mkdir -p ./logs
@@ -77,9 +84,9 @@ fi
 touch "$SERVER_LOG" "$WORKER0_LOG" "$WORKER1_LOG" "$WORKER2_LOG"
 
 # Start the server and redirect output to SERVER_LOG
-python -u ./$SERVER_SCRIPT > "$SERVER_LOG" 2>&1 &
+python -u ./$SERVER_SCRIPT --port "$CLA_SERVER_PORT" > "$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
-echo "Server PID: $SERVER_PID"
+echo "Server PID: $SERVER_PID; started on $CLA_SERVER_PORT (read by shell script)"
 
 # Function to kill the server process on exit 
 cleanup() {
@@ -92,7 +99,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Wait for the server to start and get its port
-TIMEOUT=100
+TIMEOUT=50
 START_TIME=$(date +%s)
 FOUND_PORT=false
 
@@ -108,7 +115,7 @@ while true; do
         SERVER_PORT=$(cat .server_port)
         if [[ "$SERVER_PORT" =~ ^[0-9]+$ ]]; then
             FOUND_PORT=true
-            echo "Server is listening on port $SERVER_PORT"
+            echo "Server is listening on port $SERVER_PORT (written by Server script)"
             break
         fi
     fi
@@ -125,14 +132,14 @@ while true; do
     sleep 1
 done
 
-sleep 10
+sleep 3
 
 # If the port was found, proceed with workers
 if $FOUND_PORT; then
     echo "Server started successfully. Starting workers..."
-    python -u ./$WORKER_SCRIPT 0 --port $SERVER_PORT > "$WORKER0_LOG" 2>&1 &
-    python -u ./$WORKER_SCRIPT 1 --port $SERVER_PORT > "$WORKER1_LOG" 2>&1 &
-    python -u ./$WORKER_SCRIPT 2 --port $SERVER_PORT > "$WORKER2_LOG" 2>&1 &
+    python -u ./$WORKER_SCRIPT 0 $SERVER_PORT > "$WORKER0_LOG" 2>&1 &
+    python -u ./$WORKER_SCRIPT 1 $SERVER_PORT > "$WORKER1_LOG" 2>&1 &
+    python -u ./$WORKER_SCRIPT 2 $SERVER_PORT > "$WORKER2_LOG" 2>&1 &
 else
     echo "Server did not start successfully."
     exit 1
