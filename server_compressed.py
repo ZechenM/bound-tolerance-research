@@ -30,7 +30,7 @@ class Server:
         self.worker_eval_acc = []
         self.worker_epochs = []
 
-        self.drop_rate = 0.0  # X% probability to zero out gradients
+        self.drop_rate = 0.8  # X% probability to zero out gradients
 
         # v-threshold configurations and trackers
         self.enable_v_threshold = False
@@ -63,6 +63,8 @@ class Server:
         self.server_socket.listen(self.num_workers)
         self.is_listening = True
         print(f"Server listening on {self.host}:{self.port}...")
+        
+        print(f"V-threshold enabled: {self.enable_v_threshold}")
 
     def recv_all(self, conn, size):
         """helper function to receive all data"""
@@ -109,10 +111,16 @@ class Server:
             proposed_phase = TrainingPhase.BEGIN
         elif acc_diff > 0.07:
             proposed_phase = TrainingPhase.BEGIN
-        elif 0.03 < acc_diff <= 0.07:
-            proposed_phase = TrainingPhase.MID
+        elif curr_avg_acc > 0.5:
+            if acc_diff < 0.03:
+                proposed_phase = TrainingPhase.FINAL
+            elif acc_diff <= 0.07:
+                proposed_phase = TrainingPhase.MID
+            else:
+                proposed_phase = TrainingPhase.BEGIN
+        # Ensure no phase transitions if the accuracy is not above 50%, even if acc_diff is low
         else:
-            proposed_phase = TrainingPhase.FINAL
+            proposed_phase = TrainingPhase.BEGIN
 
         # Ensure one-way state transitions:
         if proposed_phase.value >= self.training_phase.value:
@@ -172,11 +180,11 @@ class Server:
 
         # based on training phase, update the drop rate
         if self.training_phase == TrainingPhase.BEGIN:
-            self.drop_rate = 0.0
+            self.drop_rate = 0.8
         elif self.training_phase == TrainingPhase.MID:
-            self.drop_rate = 0.4
+            self.drop_rate = 0.0
         elif self.training_phase == TrainingPhase.FINAL:
-            self.drop_rate = 0.4
+            self.drop_rate = 0.0
             
         if self.has_eval_acc:
             print(f"Current drop rate: {self.drop_rate}\n")

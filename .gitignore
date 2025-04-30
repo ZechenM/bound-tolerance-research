@@ -181,3 +181,5 @@ cython_debug/
 *.pkl
 .DS_Store
 .server_port
+a.out
+mininet
