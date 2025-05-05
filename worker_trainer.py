@@ -35,7 +35,7 @@ train_args = TrainingArguments(
 
 
 class Worker:
-    def __init__(self, worker_id, port, host="localhost"):
+    def __init__(self, worker_id, host="localhost", port="60001"):
         self.worker_id = worker_id
         self.server_host = host
         self.server_port = port
@@ -181,9 +181,9 @@ class Worker:
 
 
 def main():
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 4:
         print("Invalid usage.")
-        print("USAGE: python worker_trainer.py <WORKER_ID> <SERVER_PORT>")
+        print("USAGE: python worker_trainer.py <WORKER_ID> <SERVER_IP> <SERVER_PORT>")
         sys.exit(1)
 
     # Set random seed for reproducibility
@@ -192,9 +192,10 @@ def main():
     np.random.seed(42)
 
     worker_id = int(sys.argv[1])
-    port = int(sys.argv[2])  
+    host = str(sys.argv[2])
+    port = int(sys.argv[3])  
 
-    worker = Worker(worker_id, port=port)
+    worker = Worker(worker_id, host=host, port=port)
     worker.train_worker()
 
 

@@ -1,3 +1,5 @@
+#!/home/mininet/bound-tolerance-research/.venv/bin/python3
+
 import argparse
 import pickle
 import random
@@ -20,7 +22,7 @@ class TrainingPhase(Enum):
 
 
 class Server:
-    def __init__(self, port, host="localhost", num_workers=3):
+    def __init__(self, host, port, num_workers=3):
         self.host = host
         self.port = port
         self.num_workers = num_workers
@@ -300,9 +302,11 @@ class Server:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--host", type=str, default="10.0.0.1")
     parser.add_argument("--port", type=str, default="60001")
     args = parser.parse_args()
     
+    server_host = str(args.host)
     server_port = int(args.port)
     print(f"Starting server at port with {server_port}...")
-    server = Server(server_port)
+    server = Server(server_host, server_port)
