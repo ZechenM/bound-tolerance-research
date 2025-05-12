@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 from sklearn.metrics import accuracy_score
-from torch.serialization import safe_globals
 from transformers import TrainingArguments
 
 from distributed_trainer import DistributedTrainer
@@ -84,11 +83,11 @@ class Worker:
             )
 
         # Load both dataset splits
-        with safe_globals([torch.utils.data.dataset.Subset]):
-            train_subset = torch.load(train_split_path, weights_only=False)
-            test_subset = torch.load(test_split_path, weights_only=False)
-            print(f"Loaded CIFAR10 training split containing {len(train_subset)} samples")
-            print(f"Loaded CIFAR10 test split containing {len(test_subset)} samples")
+        # with safe_globals([torch.utils.data.dataset.Subset]):
+        train_subset = torch.load(train_split_path, weights_only=False)
+        test_subset = torch.load(test_split_path, weights_only=False)
+        print(f"Loaded CIFAR10 training split containing {len(train_subset)} samples")
+        print(f"Loaded CIFAR10 test split containing {len(test_subset)} samples")
 
         # Convert the subsets into our custom dataset format
         self.train_dataset = CIFAR10Dataset(train_subset)
