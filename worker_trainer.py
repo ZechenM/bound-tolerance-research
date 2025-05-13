@@ -16,9 +16,9 @@ from my_datasets import CIFAR10Dataset
 resume_from_checkpoint = False
 
 train_args = TrainingArguments(
-    num_train_epochs=10,
-    per_device_train_batch_size=32,
-    per_device_eval_batch_size=32,
+    num_train_epochs=5,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
     weight_decay=0.01,
     learning_rate=0.001,
     logging_steps=10,
