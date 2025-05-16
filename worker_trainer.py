@@ -180,9 +180,9 @@ class Worker:
 
 
 def main():
-    if len(sys.argv) < 4:
+    if len(sys.argv) < 2:
         print("Invalid usage.")
-        print("USAGE: python worker_trainer.py <WORKER_ID> <SERVER_IP> <SERVER_PORT>")
+        print("USAGE: python worker_trainer.py <WORKER_ID> [<SERVER_IP>] [<SERVER_PORT>]")
         sys.exit(1)
 
     # Set random seed for reproducibility
@@ -191,8 +191,8 @@ def main():
     np.random.seed(42)
 
     worker_id = int(sys.argv[1])
-    host = str(sys.argv[2])
-    port = int(sys.argv[3])  
+    host = str(sys.argv[2]) if len(sys.argv) > 2 else "localhost"
+    port = int(sys.argv[3]) if len(sys.argv) > 3 else 60001 
 
     worker = Worker(worker_id, host=host, port=port)
     worker.train_worker()
