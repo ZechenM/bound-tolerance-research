@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# vim
+*.swp
+
 # C extensions
 *.so
 
@@ -182,4 +185,3 @@ cython_debug/
 .DS_Store
 .server_port
 a.out
-mininet

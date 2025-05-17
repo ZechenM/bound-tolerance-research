@@ -1,12 +1,14 @@
-#!/home/mininet/mininet/bound-tolerance-research/.venv/bin/python3
+#!/root/bound-tolerance-research/.venv/bin/python3.12
 
 from mininet.net import Mininet
-from mininet.node import Controller, OVSKernelSwitch
+from mininet.node import RemoteController, OVSKernelSwitch
 from mininet.cli import CLI
 from mininet.log import setLogLevel, info
 from mininet.topo import Topo
 from mininet.link import TCLink
 import time
+
+PYTHON = "/root/bound-tolerance-research/.venv/bin/python3.12"
 
 class WorkerServerTopo(Topo):
     """
@@ -52,7 +54,7 @@ def run_experiment():
     # --- Configuration ---
     # Assumes your project scripts are located here within the Mininet VM/environment
     # Adjust this path if your scripts are located elsewhere
-    PROJECT_DIR = "/home/mininet/mininet/bound-tolerance-research"  
+    PROJECT_DIR = "/root/bound-tolerance-research"  
 
     SERVER_SCRIPT = f"{PROJECT_DIR}/server_compressed.py"
     WORKER_SCRIPT = f"{PROJECT_DIR}/worker_trainer.py"
@@ -60,7 +62,7 @@ def run_experiment():
 
     # Define log paths within the Mininet nodes' filesystems
     # Using /tmp/ for simplicity, adjust if needed
-    LOG_DIR_BASE = "/tmp/ml_logs"
+    LOG_DIR_BASE = f"{PROJECT_DIR}/logs"
     SERVER_LOG = f"{LOG_DIR_BASE}/server.log"
     WORKER0_LOG = f"{LOG_DIR_BASE}/worker0.log"
     WORKER1_LOG = f"{LOG_DIR_BASE}/worker1.log"
@@ -75,7 +77,7 @@ def run_experiment():
     net = Mininet(
         topo=topo,
         switch=OVSKernelSwitch,  # Default switch type
-        controller=None,  # No SDN controller needed for basic L2 switching
+        controller=RemoteController,  # No SDN controller needed for basic L2 switching
         link=TCLink,  # Use TCLink for traffic control
         autoSetMacs=True,
     )  # Automatically set MAC addresses
@@ -105,7 +107,7 @@ def run_experiment():
     # Command to start the server, redirecting output to its log file
     # Uses python -u for unbuffered output, runs in background (&)
     server_cmd = (
-        f"python3 -u {SERVER_SCRIPT} --host {server_ip} --port {INITIAL_SERVER_PORT} > {SERVER_LOG} 2>&1 &"
+        f"{PYTHON} -u {SERVER_SCRIPT} --host {server_ip} --port {INITIAL_SERVER_PORT} > {SERVER_LOG} 2>&1 &"
     )
     info(f"Executing on server: {server_cmd}\n")
     server_node.cmd(server_cmd)
@@ -120,7 +122,7 @@ def run_experiment():
 
     # Worker 0
     worker0_cmd = (
-        f"python3 -u {WORKER_SCRIPT} 0 {server_ip} {INITIAL_SERVER_PORT}"
+        f"{PYTHON} -u {WORKER_SCRIPT} 0 {server_ip} {INITIAL_SERVER_PORT}"
         f"> {WORKER0_LOG} 2>&1 &"
     )
     info(f"Executing on worker0: {worker0_cmd}\n")
@@ -128,7 +130,7 @@ def run_experiment():
 
     # Worker 1
     worker1_cmd = (
-        f"python3 -u {WORKER_SCRIPT} 1 {server_ip} {INITIAL_SERVER_PORT}"
+        f"{PYTHON} -u {WORKER_SCRIPT} 1 {server_ip} {INITIAL_SERVER_PORT}"
         f"> {WORKER1_LOG} 2>&1 &"
     )
     info(f"Executing on worker1: {worker1_cmd}\n")
@@ -136,7 +138,7 @@ def run_experiment():
 
     # Worker 2
     worker2_cmd = (
-        f"python3 -u {WORKER_SCRIPT} 2 {server_ip} {INITIAL_SERVER_PORT}"
+        f"{PYTHON} -u {WORKER_SCRIPT} 2 {server_ip} {INITIAL_SERVER_PORT}"
         f"> {WORKER2_LOG} 2>&1 &"
     )
     info(f"Executing on worker2: {worker2_cmd}\n")
@@ -155,7 +157,7 @@ def run_experiment():
     info(f"*** Worker 2 log: {worker2_node.name}:{WORKER2_LOG}")
     info("*** Starting Mininet CLI. Type 'exit' to quit and stop the network.")
     info(
-        "*** You can monitor logs using commands like: worker1 tail -f /tmp/ml_logs/worker0.log\n"
+        "*** You can monitor logs using commands like: tail -f /root/bound-tolerance-research/logs/worker0.log\n"
     )
 
     # Start the Mininet Command Line Interface for interactive commands

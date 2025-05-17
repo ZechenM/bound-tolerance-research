@@ -32,7 +32,7 @@ class Server:
         self.worker_eval_acc = []
         self.worker_epochs = []
 
-        self.drop_rate = 0.8  # X% probability to zero out gradients
+        self.drop_rate = 0.0  # X% probability to zero out gradients
 
         # v-threshold configurations and trackers
         self.enable_v_threshold = False
@@ -182,7 +182,7 @@ class Server:
 
         # based on training phase, update the drop rate
         if self.training_phase == TrainingPhase.BEGIN:
-            self.drop_rate = 0.8
+            self.drop_rate = 0.0
         elif self.training_phase == TrainingPhase.MID:
             self.drop_rate = 0.0
         elif self.training_phase == TrainingPhase.FINAL:
