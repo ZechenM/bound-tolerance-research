@@ -122,24 +122,21 @@ def run_experiment():
 
     # Worker 0
     worker0_cmd = (
-        f"{PYTHON} -u {WORKER_SCRIPT} 0 {server_ip} {INITIAL_SERVER_PORT}"
-        f"> {WORKER0_LOG} 2>&1 &"
+        f"{PYTHON} -u {WORKER_SCRIPT} 0 {server_ip} {INITIAL_SERVER_PORT} > {WORKER0_LOG} 2>&1 &"
     )
     info(f"Executing on worker0: {worker0_cmd}\n")
     worker0_node.cmd(worker0_cmd)  # Note: Mininet host 'worker0' runs worker ID 0
 
     # Worker 1
     worker1_cmd = (
-        f"{PYTHON} -u {WORKER_SCRIPT} 1 {server_ip} {INITIAL_SERVER_PORT}"
-        f"> {WORKER1_LOG} 2>&1 &"
+        f"{PYTHON} -u {WORKER_SCRIPT} 1 {server_ip} {INITIAL_SERVER_PORT} > {WORKER1_LOG} 2>&1 &"
     )
     info(f"Executing on worker1: {worker1_cmd}\n")
     worker1_node.cmd(worker1_cmd)  # Note: Mininet host 'worker1' runs worker ID 1
 
     # Worker 2
     worker2_cmd = (
-        f"{PYTHON} -u {WORKER_SCRIPT} 2 {server_ip} {INITIAL_SERVER_PORT}"
-        f"> {WORKER2_LOG} 2>&1 &"
+        f"{PYTHON} -u {WORKER_SCRIPT} 2 {server_ip} {INITIAL_SERVER_PORT} > {WORKER2_LOG} 2>&1 &"
     )
     info(f"Executing on worker2: {worker2_cmd}\n")
     worker2_node.cmd(worker2_cmd)  # Note: Mininet host 'worker2' runs worker ID 2
@@ -150,22 +147,31 @@ def run_experiment():
     # Output might be interleaved with application logs if they print to stdout/stderr
     net.pingAll()
 
-    info("\n*** Applications are running in the background.")
-    info(f"*** Server log: {server_node.name}:{SERVER_LOG}")
-    info(f"*** Worker 0 log: {worker0_node.name}:{WORKER0_LOG}")
-    info(f"*** Worker 1 log: {worker1_node.name}:{WORKER1_LOG}")
-    info(f"*** Worker 2 log: {worker2_node.name}:{WORKER2_LOG}")
-    info("*** Starting Mininet CLI. Type 'exit' to quit and stop the network.")
+    info("\n*** Applications are running in the background.\n")
+    info(f"*** Server log: {server_node.name}:{SERVER_LOG}\n")
+    info(f"*** Worker 0 log: {worker0_node.name}:{WORKER0_LOG}\n")
+    info(f"*** Worker 1 log: {worker1_node.name}:{WORKER1_LOG}\n")
+    info(f"*** Worker 2 log: {worker2_node.name}:{WORKER2_LOG}\n")
+    info("*** Starting Mininet CLI. Type 'exit' to quit and stop the network.\n")
     info(
-        "*** You can monitor logs using commands like: tail -f /root/bound-tolerance-research/logs/worker0.log\n"
+        f"*** You can monitor logs using commands like: tail -f {WORKER0_LOG}\n"
     )
 
-    # Start the Mininet Command Line Interface for interactive commands
-    CLI(net)    # TODO: implement network stopping?
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        info("\n*** Keyboard interrupt received. Stopping network...")
+    finally:
+        info("*** Stopping network\n")
+        net.stop()
 
-    info("*** Stopping network\n")
-    # Stop of network emulation and clean up resources
-    net.stop()
+    # # Start the Mininet Command Line Interface for interactive commands
+    # CLI(net)    # TODO: implement network stopping?
+
+    # info("*** Stopping network\n")
+    # # Stop of network emulation and clean up resources
+    # net.stop()
 
 if __name__ == '__main__':
     topos = {'mltopo': ( lambda:  WorkerServerTopo() ) }
