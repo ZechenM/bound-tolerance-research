@@ -7,12 +7,24 @@ import subprocess
 import argparse
 import numpy as np
 import csv
+import json
 from datetime import datetime
+import re
 
 # 不同的丢包率配置
-LOSS_RATES = [0.01, 0.5, 1, 2, 5, 8, 10, 20, 40, 80]
+LOSS_RATES = [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
 
-def run_test(bandwidth=100, delay='5ms', iterations=5, data_size=1048576):
+def parse_iperf_output(output):
+    """解析 iperf 输出，提取总吞吐量（最后一行）"""
+    lines = output.strip().split('\n')
+    for line in reversed(lines):
+        if 'Mbits/sec' in line:
+            match = re.search(r'(\d+\.?\d*)\s+Mbits/sec', line)
+            if match:
+                return float(match.group(1))
+    return 0.0
+
+def run_test_all(bandwidth=100, delay='5ms', iterations=5, data_size=1048576):
     """
     运行一系列测试，对每个丢包率进行多次测试，并记录结果
     
@@ -35,128 +47,68 @@ def run_test(bandwidth=100, delay='5ms', iterations=5, data_size=1048576):
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         
-        # 对每个丢包率进行测试
-        for loss_rate in LOSS_RATES:
-            print(f"\n======= 测试丢包率 {loss_rate}% =======")
+        try:
+            # 批量复制所有相关文件到容器根目录
+            print("复制所有相关文件到容器根目录 ...")
+            for fname in ["basic_topo.py", "simple_server.py", "simple_worker.py"]:
+                subprocess.run(["docker", "cp", fname, f"mininet:/{fname}"], check=True)
             
-            for iteration in range(1, iterations + 1):
-                print(f"\n--- 迭代 {iteration}/{iterations} ---")
+            # 对每个丢包率进行测试
+            for loss_rate in LOSS_RATES:
+                print(f"\n======= 测试丢包率 {loss_rate}% =======")
                 
-                # 启动Mininet拓扑
-                print(f"启动Mininet拓扑 (带宽={bandwidth}Mbps, 延迟={delay}, 丢包率={loss_rate}%)")
-                topo_process = subprocess.Popen(
-                    ["sudo", "python", "basic_topo.py", 
-                     "--bw", str(bandwidth), 
-                     "--delay", delay, 
-                     "--loss", str(loss_rate)],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
-                
-                # 给Mininet一些时间来启动
-                time.sleep(5)
-                
-                # 在mininet中执行测试
-                print("在mininet中执行测试")
-                cmd = [
-                    "sudo", "mn", "-c"  # 清理mininet
-                ]
-                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                
-                # 我们需要通过SSH进入Mininet主机来运行测试，这通常在实际环境中通过mininet CLI完成
-                # 在这个脚本中，我们使用一个简化的方法
-                
-                # 1. 在服务器上启动iperf服务器
-                print("在服务器上启动iperf服务器")
-                server_cmd = "sudo mn --custom basic_topo.py --topo simpletopology --test iperf"
-                subprocess.run(server_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                
-                # 收集结果并记录到CSV
-                # 注意：在实际测试中，你需要从iperf或你的自定义脚本中解析实际吞吐量
-                # 这里我们使用一个模拟的计算来演示
-                
-                # 使用Mathis方程计算理论吞吐量 
-                # 吞吐量 ≈ (MSS/RTT) * (1/sqrt(p))
-                # 其中MSS为最大段大小，RTT为往返时延，p为丢包率
-                
-                # 假设MSS = 1460字节，RTT由delay计算
-                mss = 1460  # bytes
-                rtt = float(delay.replace('ms', '')) * 2 / 1000  # 秒
-                p = loss_rate / 100  # 转换为比例
-                
-                # 避免除以零
-                if p < 0.00001:
-                    p = 0.00001
-                
-                # 计算理论最大吞吐量 (bytes/sec)
-                theory_throughput = (mss/rtt) * (1/np.sqrt(p))
-                
-                # 转换为Mbps
-                theory_throughput_mbps = theory_throughput * 8 / 1000000
-                
-                # 在实际中，我们会有一些随机变化，所以这里添加一些噪声
-                for worker_id in range(3):
-                    # 添加一些随机变化
-                    worker_throughput = theory_throughput_mbps * np.random.uniform(0.9, 1.1)
+                for iteration in range(1, iterations + 1):
+                    print(f"\n--- 迭代 {iteration}/{iterations} ---")
                     
-                    # 记录结果
-                    writer.writerow({
-                        'loss_rate': loss_rate,
-                        'iteration': iteration,
-                        'worker_id': worker_id,
-                        'throughput': worker_throughput
-                    })
-                    csvfile.flush()  # 确保写入磁盘
-                    
-                    print(f"工作节点 {worker_id} 吞吐量: {worker_throughput:.2f} Mbps")
-                
-                # 终止Mininet
-                topo_process.terminate()
-                
-                # 清理Mininet
-                subprocess.run(["sudo", "mn", "-c"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                
-                # 等待一段时间再进行下一次迭代
-                time.sleep(2)
-    
-    # 创建分析脚本
-    plot_script = os.path.join(results_dir, "plot_results.py")
-    with open(plot_script, 'w') as f:
-        f.write("""#!/usr/bin/env python
-import pandas as pd
-import matplotlib.pyplot as plt
-import numpy as np
-
-# 读取数据
-df = pd.read_csv('throughput_results.csv')
-
-# 按丢包率分组并计算平均吞吐量
-grouped = df.groupby('loss_rate')['throughput'].agg(['mean', 'std'])
-
-# 创建图表
-plt.figure(figsize=(10, 6))
-plt.errorbar(grouped.index, grouped['mean'], yerr=grouped['std'], marker='o', linestyle='-')
-plt.xscale('log')
-plt.xlabel('丢包率 (%)')
-plt.ylabel('吞吐量 (Mbps)')
-plt.title('丢包率与吞吐量的关系')
-plt.grid(True)
-
-# 添加Mathis方程的理论曲线
-x = np.logspace(-2, 2, 100)  # 从0.01%到100%
-y = 100 * 1/np.sqrt(x/100)  # 假设最大吞吐量为100Mbps
-plt.plot(x, y, 'r--', label='Mathis方程')
-
-plt.legend()
-plt.tight_layout()
-plt.savefig('throughput_vs_loss.png')
-plt.show()
-""")
+                    try:
+                        # 运行测试
+                        print(f"运行测试 (带宽={bandwidth}Mbps, 延迟={delay}, 丢包率={loss_rate}%)")
+                        cmd = [
+                            "docker", "exec", "mininet", "python3", "/basic_topo.py",
+                            "--bw", str(bandwidth),
+                            "--delay", delay,
+                            "--loss", str(loss_rate)
+                        ]
+                        result = subprocess.run(cmd, capture_output=True, text=True)
+                        
+                        if result.returncode != 0:
+                            print(f"警告: 测试运行失败")
+                            print(result.stderr)
+                            continue
+                        
+                        # 解析 JSON 结果
+                        try:
+                            results = json.loads(result.stdout)
+                            for worker_id, output in enumerate(results):
+                                throughput = parse_iperf_output(output)
+                                
+                                # 记录结果
+                                writer.writerow({
+                                    'loss_rate': loss_rate,
+                                    'iteration': iteration,
+                                    'worker_id': worker_id,
+                                    'throughput': throughput
+                                })
+                                csvfile.flush()  # 确保写入磁盘
+                                
+                                print(f"工作节点 {worker_id} 吞吐量: {throughput:.2f} Mbps")
+                        except json.JSONDecodeError:
+                            print("警告: 无法解析测试结果")
+                            print(result.stdout)
+                        
+                        # 等待一段时间再进行下一次迭代
+                        time.sleep(2)
+                        
+                    except Exception as e:
+                        print(f"测试过程中出现错误: {str(e)}")
+                        continue
+            
+        except Exception as e:
+            print(f"测试过程中出现错误: {str(e)}")
     
     print(f"\n测试完成。结果已保存到 {results_file}")
-    print(f"分析脚本已创建：{plot_script}")
-    print("运行分析脚本以生成结果图表：")
-    print(f"python {plot_script}")
+    print(f"使用以下命令生成结果图表：")
+    print(f"python plot_results.py {results_dir}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="运行一系列丢包率测试")
@@ -167,7 +119,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    run_test(
+    run_test_all(
         bandwidth=args.bw,
         delay=args.delay,
         iterations=args.iterations,
