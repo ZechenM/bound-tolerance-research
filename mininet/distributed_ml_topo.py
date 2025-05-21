@@ -98,7 +98,8 @@ def run_experiment():
 
     # Create log directory for all hosts
     info(f"*** Creating log directory '{LOG_DIR_BASE}' on nodes...\n")
-    server_node.cmd(f"mkdir -p {LOG_DIR_BASE}")
+    for node in [server_node, worker0_node, worker1_node, worker2_node]:
+        node.cmd(f"mkdir -p {LOG_DIR_BASE}")
     # Optional: Ensure the project directory exists if needed by scripts
     # node.cmd(f'mkdir -p {PROJECT_DIR}') # Uncomment if scripts expect it
 
@@ -106,40 +107,56 @@ def run_experiment():
     info("*** Starting Server Application...\n")
     # Command to start the server, redirecting output to its log file
     # Uses python -u for unbuffered output, runs in background (&)
-    server_cmd = (
-        f"{PYTHON} -u {SERVER_SCRIPT} --host {server_ip} --port {INITIAL_SERVER_PORT} > {SERVER_LOG} 2>&1 &"
-    )
+    # TODO: figure out if "runs in background is needed or not"
+    server_cmd = f"{PYTHON} -u {SERVER_SCRIPT} --host {server_ip} --port {INITIAL_SERVER_PORT}"
     info(f"Executing on server: {server_cmd}\n")
-    server_node.cmd(server_cmd)
+        
+    # Create log file for redirecting output
+    os.makedirs(os.path.dirname(SERVER_LOG), exist_ok=True)
+    server_proc = server_node.popen(server_cmd.split(),
+                                    stdout=open(SERVER_LOG, 'w'),
+                                    stderr=open(SERVER_LOG, 'a'))
 
     # Give the server a moment to start up and bind to the port
-    # info("*** Waiting for server to initialize...\n")
-    # time.sleep(3)  # Adjust sleep time if server needs longer
+    info("*** Waiting for server to initialize...\n")
+    time.sleep(3)  # Adjust sleep time if server needs longer
 
     info("*** Starting Worker Applications...\n")
+    # Using popen for better process management
+    
+    # Create log files for redirecting output
+    for log_file in [WORKER0_LOG, WORKER1_LOG, WORKER2_LOG]:
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+                        
     # Commands to start the workers, passing worker ID, server IP, and server port
-    # Redirects output to worker-specific log files, runs in background (&)
-
     # Worker 0
     worker0_cmd = (
-        f"{PYTHON} -u {WORKER_SCRIPT} 0 {server_ip} {INITIAL_SERVER_PORT} > {WORKER0_LOG} 2>&1 &"
+        f"{PYTHON} -u {WORKER_SCRIPT} 0 {server_ip} {INITIAL_SERVER_PORT}"
     )
     info(f"Executing on worker0: {worker0_cmd}\n")
-    worker0_node.cmd(worker0_cmd)  # Note: Mininet host 'worker0' runs worker ID 0
+    worker0_proc = worker0_node.popen(worker0_cmd.split(),
+                                    stdout = open(WORKER0_LOG, 'w'),
+                                    stderr = open(WORKER0_LOG, 'a'))
 
     # Worker 1
     worker1_cmd = (
-        f"{PYTHON} -u {WORKER_SCRIPT} 1 {server_ip} {INITIAL_SERVER_PORT} > {WORKER1_LOG} 2>&1 &"
+        f"{PYTHON} -u {WORKER_SCRIPT} 1 {server_ip} {INITIAL_SERVER_PORT}"
     )
     info(f"Executing on worker1: {worker1_cmd}\n")
-    worker1_node.cmd(worker1_cmd)  # Note: Mininet host 'worker1' runs worker ID 1
+    worker1_proc = worker1_node.popen(worker1_cmd.split(),
+                                    stdout = open(WORKER1_LOG, 'w'),
+                                    stderr = open(WORKER1_LOG, 'a'))
+
 
     # Worker 2
     worker2_cmd = (
-        f"{PYTHON} -u {WORKER_SCRIPT} 2 {server_ip} {INITIAL_SERVER_PORT} > {WORKER2_LOG} 2>&1 &"
+        f"{PYTHON} -u {WORKER_SCRIPT} 2 {server_ip} {INITIAL_SERVER_PORT}"
     )
     info(f"Executing on worker2: {worker2_cmd}\n")
-    worker2_node.cmd(worker2_cmd)  # Note: Mininet host 'worker2' runs worker ID 2
+    worker2_proc = worker2_node.popen(worker2_cmd.split(),
+                                    stdout = open(WORKER2_LOG, 'w'),
+                                    stderr = open(WORKER2_LOG, 'a'))
+
     # --- End Application Start ---
 
     info("\n*** Running basic connectivity tests (pingall)...\n")
