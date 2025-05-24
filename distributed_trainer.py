@@ -73,6 +73,7 @@ class DistributedTrainer(Trainer):
 
     def send_recv(self, gradients):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            # print(self.server_host, self.server_port)
             s.connect((self.server_host, self.server_port))
             print(f"Worker {self.worker_id} connected to server.")
             self.send_data(s, gradients)

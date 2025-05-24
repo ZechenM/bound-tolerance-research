@@ -137,9 +137,9 @@ sleep 3
 # If the port was found, proceed with workers
 if $FOUND_PORT; then
     echo "Server started successfully. Starting workers..."
-    python -u ./$WORKER_SCRIPT 0 $SERVER_PORT > "$WORKER0_LOG" 2>&1 &
-    python -u ./$WORKER_SCRIPT 1 $SERVER_PORT > "$WORKER1_LOG" 2>&1 &
-    python -u ./$WORKER_SCRIPT 2 $SERVER_PORT > "$WORKER2_LOG" 2>&1 &
+    python -u ./$WORKER_SCRIPT 0 "localhost" $SERVER_PORT > "$WORKER0_LOG" 2>&1 &
+    python -u ./$WORKER_SCRIPT 1 "localhost" $SERVER_PORT > "$WORKER1_LOG" 2>&1 &
+    python -u ./$WORKER_SCRIPT 2 "localhost" $SERVER_PORT > "$WORKER2_LOG" 2>&1 &
 else
     echo "Server did not start successfully."
     exit 1
