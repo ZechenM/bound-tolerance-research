@@ -53,14 +53,14 @@ class Worker:
             print("Using CPU device")
 
         # # Load untrained EfficientNetB0 model
-        # self.model = models.efficientnet_b0(weights=None)
+        self.model = models.efficientnet_b0(weights=None)
 
         
         # Load denseNet169 model
-        self.model = models.densenet169(weights=None)
+        # self.model = models.densenet169(weights=None)
         # Modify the model's classifier to output 10 classes (CIFAR10)
-        in_features = self.model.classifier.in_features
-        self.model.classifier = nn.Linear(in_features, 10)
+        # in_features = self.model.classifier.in_features
+        # self.model.classifier = nn.Linear(in_features, 10)
         self.model = self.model.to(self.device)
         print(f"Model moved to {self.device}")
 

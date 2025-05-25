@@ -95,9 +95,9 @@ class Server:
             conn, addr = self.server_socket.accept()
             self.connections.append(conn)
             self.conn_addr_map[conn] = addr
-            print(f"Connected to worker at {addr}")
+            # print(f"Connected to worker at {addr}")
 
-        print("All workers connected.")
+        # print("All workers connected.")
 
     def _training_phase_update(self):
         if len(self.worker_eval_acc) < 3:

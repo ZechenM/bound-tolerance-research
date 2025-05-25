@@ -33,8 +33,8 @@ class WorkerServerTopo(Topo):
         s1 = self.addSwitch('s1')
 
         # Define link characteristics
-        link_opts_base = dict(bw=100, delay='1ms', loss=0, max_queue_size=1000, use_htb=True)
-        link_opts_server = dict(bw=1000, delay='1ms', loss=0, max_queue_size=1000, use_htb=True)
+        link_opts_base = dict(bw=100, delay='1ms', loss=1, max_queue_size=1000, use_htb=True)
+        link_opts_server = dict(bw=1000, delay='1ms', loss=1, max_queue_size=1000, use_htb=True)
 
 
         info("*** Adding Worker Links with Loss:\n")
