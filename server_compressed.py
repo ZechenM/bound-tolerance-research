@@ -65,7 +65,7 @@ class Server:
         self.server_socket.listen(self.num_workers)
         self.is_listening = True
         print(f"Server listening on {self.host}:{self.port}...")
-        
+
         print(f"V-threshold enabled: {self.enable_v_threshold}")
 
     def recv_all(self, conn, size):
@@ -129,12 +129,12 @@ class Server:
             self.training_phase = proposed_phase
 
         self.prev_avg_acc = curr_avg_acc
-        
+
         print(f"All worker eval acc: {self.worker_eval_acc}")
         print(f"All worker epochs: {self.worker_epochs}")
         print(f"Current averaged accuracy: {self.prev_avg_acc}")
         print(f"Current training phase: {self.training_phase}")
-        
+
         self.worker_eval_acc.clear()
         self.worker_epochs.clear()
 
@@ -187,7 +187,7 @@ class Server:
             self.drop_rate = 0.0
         elif self.training_phase == TrainingPhase.FINAL:
             self.drop_rate = 0.0
-            
+
         if self.has_eval_acc:
             print(f"Current drop rate: {self.drop_rate}\n")
 
@@ -305,7 +305,7 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=str, default="60001")
     args = parser.parse_args()
-    
+
     server_host = str(args.host)
     server_port = int(args.port)
     print(f"Starting server at port with {server_port}...")

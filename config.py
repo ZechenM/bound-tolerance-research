@@ -14,3 +14,12 @@ compress, decompress = compression_mapping[compression_method]
 
 # config 2: debug mode
 DEBUG = 0
+
+
+# config 3: model
+
+# config 4: dataset
+
+
+# config 5: transport protocal
+protocol = ["TCP", "MLT"][1]

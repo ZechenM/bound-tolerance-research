@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import Trainer
+from typing import List
 
 
 def custom_collate_fn(batch):
@@ -35,11 +36,22 @@ class DistributedTrainer(Trainer):
         self.start_time = 0
         self.end_time = 0
         self.past_epoch = 0.0
+        self.protocol = kwargs.pop("protocol", "MLT")
+        if self.protocol == "MLT":
+            self.chunk_size = 1024
+            self.send_data = self.send_data_MLT
+            self.recv_data = self.recv_data_MLT
+        elif self.protocol == "TCP":
+            self.send_data = self.send_data_TCP
+            self.recv_data = self.recv_data_TCP
+        else:
+            raise TypeError(f"protocol {self.protocol} is not supported (TCP | MLT)")
+        self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
         # Initialize parent class with remaining arguments
         super().__init__(*args, **kwargs)
 
-    def send_data(self, sock, data):
+    def send_data_TCP(self, sock, data):
         data_bytes = pickle.dumps(data)
         self.start_time = time.perf_counter()
         sock.sendall(struct.pack("!I", len(data_bytes)))
@@ -47,17 +59,61 @@ class DistributedTrainer(Trainer):
         self.end_time = time.perf_counter()
         self.calc_network_latency(True)
 
-    def send_data_MLT(self, gradient):
+    def _chunk_gradient(self, gradient) -> List[bytes]:
+        """Serialize gradient and break into chunks"""
+        data_bytes = pickle.dumps(gradient)
+        return [data_bytes[i : i + self.chunk_size] for i in range(0, len(data_bytes), self.chunk_size)]
+
+    def send_data_MLT(self, TCP_sock, gradient):
         """
         Using MLT to communicate with the server about gradient update.
 
-        MLT: 
+        MLT:
         1. divide the gradients into fix-sized chunks, label chunks into consecutive IDs
         2. Using UDP network to send over chunks. When it's done, send over a "probe" signal to request receiver status
         3. If "stop" signal is not received, and status bitmap is received, re-transmit missing gradient to the server
         """
+        # divide the gradients, start the timer and send size information to the server throught TCP
+        chunks = self._chunk_gradient(gradient)
+        self.start_time = time.perf_counter()
+        TCP_sock.sendall(struct.pack("!I", len(chunks)))
+        stop = False
+        bitmap = bytearray((len(chunks) + 7) // 8)  # 1 bit per chunk
+        while not stop:
+            # Using UDP to send over gradient in the form of chunks. Label each chunk with consecutive ID
+            # for seq, chunk in enumerate(chunks):
+            #     header = struct.pack("!III", seq, len(chunks), len(chunk))
+            #     packet = header + chunk
+            #     self.UDP_socket.sendto(packet, (self.server_host, self.server_port))
 
-    def recv_data(self, sock):
+            for i in range(len(chunks)):
+                byte_index = i // 8
+                bit_index = i % 8
+                received = (bitmap[byte_index] >> bit_index) & 1
+                if not received:
+                    chunk = chunks[i]
+                    header = struct.pack("!III", i, len(chunks), len(chunk))
+                    packet = header + chunk
+                    self.UDP_socket.sendto(packet, (self.server_host, self.server_port))
+
+            try:
+                # try to send "probe" signal to the server through TCP network.
+                TCP_sock.sendall(b"P")  # "probe" signal
+                signal = TCP_sock.recv(1)
+                if signal == b"S":  # "stop" signal
+                    stop = True
+                elif signal == b"B":  # "bitmap signal"
+                    bitmap = TCP_sock.recv(len(bitmap))
+                else:
+                    raise ValueError(f"cannot recognize signal from server: {signal}")
+            except Exception as e:
+                print("from send_data_MLT", e)
+                stop = True
+
+        self.end_time = time.perf_counter()
+        self.calc_network_latency(is_send=True)
+
+    def recv_data_TCP(self, sock):
         # First receive the ACK from the server
         ack = sock.recv(1)
         if ack != b"A":
@@ -81,12 +137,19 @@ class DistributedTrainer(Trainer):
         self.calc_network_latency(False)
         return pickle.loads(data)
 
+    def recv_data_MLT(self, TCP_sock):
+        self.start_time = time.perf_counter()
+
+        self.end_time = time.perf_counter()
+        self.calc_network_latency(is_send=False)
+        return  # averaged gradient
+
     def send_recv(self, gradients):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             # print(self.server_host, self.server_port)
             s.connect((self.server_host, self.server_port))
             print(f"Worker {self.worker_id} connected to server.")
-            self.send_data(s, gradients)  # TODO: move the connection to TCP traffic to send_data_TCP, keep API here generic
+            self.send_data(s, gradients)
             avg_gradients = self.recv_data(s)
             if avg_gradients is None:
                 return False, None
@@ -215,7 +278,7 @@ class DistributedTrainer(Trainer):
                     # Make sure max_steps is higher than checkpoint step
                     if self.args.max_steps <= checkpoint_step:
                         print(f"Adjusting max_steps from {self.args.max_steps} to {checkpoint_step + 20500}")
-                        self.args.max_steps = checkpoint_step + 20500 # should be double if I want to do 2 time more epoch
+                        self.args.max_steps = checkpoint_step + 20500  # should be double if I want to do 2 time more epoch
                 except:
                     print("Could not parse checkpoint step")
 

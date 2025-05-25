@@ -13,6 +13,8 @@ from transformers import TrainingArguments
 from distributed_trainer import DistributedTrainer
 from my_datasets import CIFAR10Dataset
 
+from config import *
+
 resume_from_checkpoint = False
 
 train_args = TrainingArguments(
@@ -55,7 +57,6 @@ class Worker:
         # # Load untrained EfficientNetB0 model
         self.model = models.efficientnet_b0(weights=None)
 
-        
         # Load denseNet169 model
         # self.model = models.densenet169(weights=None)
         # Modify the model's classifier to output 10 classes (CIFAR10)
@@ -158,6 +159,7 @@ class Worker:
             server_port=self.server_port,
             worker_id=self.worker_id,
             device=self.device,
+            protocol=protocol,
         )
 
         # Start training
@@ -192,7 +194,7 @@ def main():
 
     worker_id = int(sys.argv[1])
     host = str(sys.argv[2]) if len(sys.argv) > 2 else "localhost"
-    port = int(sys.argv[3]) if len(sys.argv) > 3 else 60001 
+    port = int(sys.argv[3]) if len(sys.argv) > 3 else 60001
 
     worker = Worker(worker_id, host=host, port=port)
     worker.train_worker()
