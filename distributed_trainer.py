@@ -47,6 +47,16 @@ class DistributedTrainer(Trainer):
         self.end_time = time.perf_counter()
         self.calc_network_latency(True)
 
+    def send_data_MLT(self, gradient):
+        """
+        Using MLT to communicate with the server about gradient update.
+
+        MLT: 
+        1. divide the gradients into fix-sized chunks, label chunks into consecutive IDs
+        2. Using UDP network to send over chunks. When it's done, send over a "probe" signal to request receiver status
+        3. If "stop" signal is not received, and status bitmap is received, re-transmit missing gradient to the server
+        """
+
     def recv_data(self, sock):
         # First receive the ACK from the server
         ack = sock.recv(1)
@@ -76,7 +86,7 @@ class DistributedTrainer(Trainer):
             # print(self.server_host, self.server_port)
             s.connect((self.server_host, self.server_port))
             print(f"Worker {self.worker_id} connected to server.")
-            self.send_data(s, gradients)
+            self.send_data(s, gradients)  # TODO: move the connection to TCP traffic to send_data_TCP, keep API here generic
             avg_gradients = self.recv_data(s)
             if avg_gradients is None:
                 return False, None
