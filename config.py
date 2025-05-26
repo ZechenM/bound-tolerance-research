@@ -23,3 +23,6 @@ DEBUG = 0
 
 # config 5: transport protocal
 protocol = ["TCP", "MLT"][1]
+
+# config 6: bounded-loss tolerance
+loss_tolerance = 0.03

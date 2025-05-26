@@ -160,6 +160,7 @@ class Worker:
             worker_id=self.worker_id,
             device=self.device,
             protocol=protocol,
+            loss_tolerance=loss_tolerance,
         )
 
         # Start training
