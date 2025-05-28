@@ -38,12 +38,12 @@ class DistributedTrainer(Trainer):
         self.end_time = 0
         self.past_epoch = 0.0
         self.protocol = kwargs.pop("protocol", "MLT")
+        self.loss_tolerance = kwargs.pop("loss_tolerance", 0.03)
         if self.protocol == "MLT":
-            self.chunk_size = 1024
+            self.chunk_size = 1024  # TODO: avoid hard-coding. Make it automatically aligh with the server.
             self.send_data = self.send_data_MLT
             self.recv_data = self.recv_data_MLT
             self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.loss_tolerance = kwargs.pop("loss_tolerance", 0.03)
         elif self.protocol == "TCP":
             self.send_data = self.send_data_TCP
             self.recv_data = self.recv_data_TCP
