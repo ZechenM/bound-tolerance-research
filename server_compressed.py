@@ -47,6 +47,20 @@ class Server:
         self.total_params = 0
         self.zeroed_params = 0
 
+        # gradient communication protocal configurations
+        self.protocol = protocol
+        if self.protocol == "MLT":
+            self.chunk_size = 1024  # TODO: avoid hard-coding. Make it automatically aligh with the trainer.
+            self.send_data = self.send_data_MLT
+            self.recv_data = self.recv_data_MLT
+            self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.loss_tolerance = loss_tolerance
+        elif self.protocol == "TCP":
+            self.send_data = self.send_data_TCP
+            self.recv_data = self.recv_data_TCP
+        else:
+            raise TypeError(f"protocol {self.protocol} is not supported (TCP | MLT)")
+
         self.write_to_server_port()
         self.start_server()
         self.run_server()
@@ -138,38 +152,59 @@ class Server:
         self.worker_eval_acc.clear()
         self.worker_epochs.clear()
 
+
+    def recv_data_TCP(self, TCP_sock):
+        # Receive the size of the incoming data
+        size_data = self.recv_all(TCP_sock, 4)
+        if not size_data:
+            raise ValueError("Failed to receive data size.")
+
+        size = struct.unpack("!I", size_data)[0]
+
+        # Receive the actual data
+        data = self.recv_all(TCP_sock, size)
+        if not data:
+            raise ValueError("Failed to receive data.")
+
+        # response with ACK
+        TCP_sock.sendall(b"A")
+
+        compressed_grad = pickle.loads(data)
+        grad = decompress(compressed_grad)
+
+        if "eval_acc" in grad:
+            self.has_eval_acc = True
+            self.worker_eval_acc.append(grad["eval_acc"])
+            self.worker_epochs.append(grad["epoch"])
+            del grad["epoch"]
+            del grad["eval_acc"]
+        
+        return grad
+
+
+    def recv_data_MLT(self, TCP_sock):
+        pass
+        TCP_sock.sendall(b"A")  # send ACK after enough gradient was received, for historical reason
+
+
+    def send_data_TCP(self, TCP_sock, gradient):
+        # Send the size of the data first
+        TCP_sock.sendall(struct.pack("!I", len(gradient)))
+        # Sendall the actual data
+        TCP_sock.sendall(gradient)
+
+
+    def send_data_MLT(self, TCP_sock):
+        pass
+
+
     def recv_send(self):
         """Receive gradients from all workers and send back averaged gradients"""
         gradients = []
         self.has_eval_acc = False
 
         for conn in self.connections:
-            # Receive the size of the incoming data
-            size_data = self.recv_all(conn, 4)
-            if not size_data:
-                print("Failed to receive data size.")
-                continue
-            size = struct.unpack("!I", size_data)[0]
-
-            # Receive the actual data
-            data = self.recv_all(conn, size)
-            if not data:
-                print("Failed to receive data.")
-                continue
-
-            # response with ACK
-            conn.sendall(b"A")
-
-            compressed_grad = pickle.loads(data)
-            grad = decompress(compressed_grad)
-
-            if "eval_acc" in grad:
-                self.has_eval_acc = True
-                self.worker_eval_acc.append(grad["eval_acc"])
-                self.worker_epochs.append(grad["epoch"])
-                del grad["epoch"]
-                del grad["eval_acc"]
-
+            grad = self.recv_data(conn)
             gradients.append(grad)
             # print(f"Received gradients from worker {self.conn_addr_map[conn]}")
 
@@ -260,10 +295,7 @@ class Server:
 
         # Send averaged gradients back to all workers
         for conn in self.connections:
-            # Send the size of the data first
-            conn.sendall(struct.pack("!I", len(avg_gradients_data)))
-            # Sendall the actual data
-            conn.sendall(avg_gradients_data)
+            self.send_data(conn, avg_gradients_data)
             # print(f"Sent averaged gradients to worker {self.conn_addr_map[conn]}")
 
     def run_server(self) -> None:
