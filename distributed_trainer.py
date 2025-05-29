@@ -9,6 +9,9 @@ from torch.utils.data import DataLoader
 from transformers import Trainer
 from typing import List
 import select
+import traceback
+
+DEBUG = 1
 
 
 def custom_collate_fn(batch):
@@ -42,8 +45,9 @@ class DistributedTrainer(Trainer):
         if self.protocol == "MLT":
             self.chunk_size = 1024  # TODO: avoid hard-coding. Make it automatically aligh with the server.
             self.send_data = self.send_data_MLT
-            self.recv_data = self.recv_data_MLT
+            self.recv_data = self.recv_data_TCP  # TODO: MLT recv is not working now, need UDP port. Temp using TCP
             self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.UDP_socket.bind(("0.0.0.0", self.server_port + 2 + self.worker_id))
         elif self.protocol == "TCP":
             self.send_data = self.send_data_TCP
             self.recv_data = self.recv_data_TCP
@@ -78,14 +82,19 @@ class DistributedTrainer(Trainer):
         # divide the gradients, start the timer and send size information to the server throught TCP
         chunks = self._chunk_gradient(gradient)
         self.start_time = time.perf_counter()
-        TCP_sock.sendall(b"A")  # send over a ready-go signal
+        # TCP_sock.sendall(b"A")  # send over a ready-go signal
+        if DEBUG: print("1")
         TCP_sock.sendall(struct.pack("!I", len(chunks)))
+        if DEBUG: print("2")
         bitmap = bytearray((len(chunks) + 7) // 8)  # 1 bit per chunk
-        TCP_sock.setblocking(False)  # Make TCP non-blocking
+        # TCP_sock.setblocking(False)  # Make TCP non-blocking
         while True:
+            if DEBUG: print("3")
             readable, _, _ = select.select([TCP_sock], [], [], 0.001)
             if TCP_sock in readable:
+                if DEBUG: print("4")
                 signal = TCP_sock.recv(1)
+                if DEBUG: print("5")
                 if signal == b"S":
                     break
                 else:
@@ -103,7 +112,9 @@ class DistributedTrainer(Trainer):
 
             try:
                 # try to send "probe" signal to the server through TCP network.
+                if DEBUG: print("6")
                 TCP_sock.sendall(b"P")  # "probe" signal
+                if DEBUG: print("6.5")
                 signal = TCP_sock.recv(1)
                 if signal == b"S":  # "stop" signal
                     break
@@ -111,8 +122,10 @@ class DistributedTrainer(Trainer):
                     bitmap = TCP_sock.recv(len(bitmap))
                 else:
                     raise ValueError(f"cannot recognize signal from server: {signal}")
+                if DEBUG: print("7")
             except Exception as e:
                 print("send_data_MLT: ", e)
+                traceback.print_exc()
                 break
 
         TCP_sock.setblocking(True)
@@ -121,9 +134,9 @@ class DistributedTrainer(Trainer):
 
     def recv_data_TCP(self, sock):
         # First receive the ACK from the server
-        ack = sock.recv(1)
-        if ack != b"A":
-            print(f"Warning: Expected ACK but received: {ack}")
+        # ack = sock.recv(1)
+        # if ack != b"A":
+        #     print(f"Warning: Expected ACK but received: {ack}")
 
         # Now receive the actual data with size header
         size_data = sock.recv(4)
@@ -159,9 +172,9 @@ class DistributedTrainer(Trainer):
                 will never result in chunk desolate (chunk not sent but bitmap is set to 1).
         """
         # Receive ready-go signal
-        ack = TCP_sock.recv(1)
-        if ack != b"A":
-            print(f"Warning: Expected ACK but received: {ack}")
+        # ack = TCP_sock.recv(1)
+        # if ack != b"A":
+        #     print(f"Warning: Expected ACK but received: {ack}")
 
         # Receive total number of chunks
         size_data = TCP_sock.recv(4)

@@ -11,6 +11,9 @@ import torch
 
 from compression import *
 from config import *
+import select
+
+DEBUG = 1
 
 print(f"Compression Method: {compression_method}")
 
@@ -51,9 +54,10 @@ class Server:
         self.protocol = protocol
         if self.protocol == "MLT":
             self.chunk_size = 1024  # TODO: avoid hard-coding. Make it automatically aligh with the trainer.
-            self.send_data = self.send_data_MLT
+            self.send_data = self.send_data_TCP  # TODO: MLT send is not working now, need UDP port. Temp using TCP
             self.recv_data = self.recv_data_MLT
             self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.UDP_socket.bind(("0.0.0.0", self.port + 1))  # TODO: each worker should allocate one UDP socket
             self.loss_tolerance = loss_tolerance
         elif self.protocol == "TCP":
             self.send_data = self.send_data_TCP
@@ -167,7 +171,7 @@ class Server:
             raise ValueError("Failed to receive data.")
 
         # response with ACK
-        TCP_sock.sendall(b"A")
+        # TCP_sock.sendall(b"A")
 
         compressed_grad = pickle.loads(data)
         grad = decompress(compressed_grad)
@@ -183,8 +187,92 @@ class Server:
 
 
     def recv_data_MLT(self, TCP_sock):
-        pass
-        TCP_sock.sendall(b"A")  # send ACK after enough gradient was received, for historical reason
+        size_data = TCP_sock.recv(4)
+        if not size_data:
+            return None
+        total_chunks = struct.unpack("!I", size_data)[0]
+
+        # self.start_time = time.perf_counter()
+
+        # Initialize storage and bitmap
+        received_chunks = [None] * total_chunks
+        bitmap = bytearray((total_chunks + 7) // 8)  # 1 bit per chunk
+        expected_packet_size = self.chunk_size + 12  # 12-byte header
+        socket_timeout = 2.0  # Adjust based on network conditions
+
+        # Set socket timeout
+        self.UDP_socket.settimeout(socket_timeout)
+        TCP_sock.setblocking(False)  # Make TCP non-blocking
+        while None in received_chunks:
+            try:
+                readable, _, _ = select.select([self.UDP_socket, TCP_sock], [], [], 0.001)
+                if TCP_sock in readable:
+                    signal = TCP_sock.recv(1)
+                    if signal == b"P":
+                        TCP_sock.sendall(b"B")
+                        TCP_sock.sendall(bitmap)
+                        if DEBUG: print(bitmap)
+                    else:
+                        print(f"recv_data_MLT: cannot recognize signal from server:{signal}")
+
+                if self.UDP_socket in readable:
+                    # Receive packet with extra buffer space
+                    packet, _ = self.UDP_socket.recvfrom(expected_packet_size + 100)
+                    if DEBUG: print("received packets")
+                    # Verify minimum packet size
+                    if len(packet) < 12:
+                        print(f"Packet too small: {len(packet)} bytes")
+                        continue
+
+                    # Unpack header (seq, total_chunks, chunk_size)
+                    seq, chunk_count, chunk_size = struct.unpack("!III", packet[:12])
+
+                    # Validate sequence number
+                    if seq >= total_chunks:
+                        print(f"Invalid sequence number: {seq}")
+                        continue
+
+                    # Verify payload size matches header
+                    if len(packet[12:]) != chunk_size:
+                        print(f"Payload size mismatch: expected {chunk_size}, got {len(packet[12:])}")
+                        continue
+
+                    # Store valid chunk and update bitmap
+                    received_chunks[seq] = packet[12:]
+                    byte_index = seq // 8
+                    bit_index = seq % 8
+                    bitmap[byte_index] = bitmap[byte_index] | (1 << bit_index)
+
+                    # early termination: loss within boundary
+                    missing_rate = 1 - (received_chunks.count(None) / total_chunks)
+                    if missing_rate < self.loss_tolerance:
+                        TCP_sock.sendall(b"S")
+                        if DEBUG: print("recv_data_MLT: early termination")
+                        break
+
+            except socket.timeout:
+                print("Timeout waiting for packets")
+                break
+            except Exception as e:
+                print(f"Error receiving packet: {e}")
+                break
+
+        # Reset socket timeout
+        self.UDP_socket.settimeout(None)
+        TCP_sock.setblocking(True)
+        # self.end_time = time.perf_counter()
+        # self.calc_network_latency(is_send=False)
+
+        # if chunk not received, fill with 0
+        for i, chunk in enumerate(received_chunks):
+            if chunk == None:
+                if DEBUG: print("fill with zeros")
+                received_chunks[i] = bytes(self.chunk_size)
+
+        # Reconstruct original data
+        data_bytes = b"".join(received_chunks)
+
+        return pickle.loads(data_bytes)
 
 
     def send_data_TCP(self, TCP_sock, gradient):
@@ -194,8 +282,50 @@ class Server:
         TCP_sock.sendall(gradient)
 
 
-    def send_data_MLT(self, TCP_sock):
-        pass
+    def send_data_MLT(self, TCP_sock, gradient):
+        # divide the gradients, start the timer and send size information to the server throught TCP
+        chunks = self._chunk_gradient(gradient)
+        # self.start_time = time.perf_counter()
+        # TCP_sock.sendall(b"A")  # send over a ready-go signal
+        TCP_sock.sendall(struct.pack("!I", len(chunks)))
+        bitmap = bytearray((len(chunks) + 7) // 8)  # 1 bit per chunk
+        TCP_sock.setblocking(False)  # Make TCP non-blocking
+        while True:
+            readable, _, _ = select.select([TCP_sock], [], [], 0.001)
+            if TCP_sock in readable:
+                signal = TCP_sock.recv(1)
+                if signal == b"S":
+                    break
+                else:
+                    print(f"send_data_MLT: server sending improper signal: {signal}")
+            # Using UDP to send over gradient in the form of chunks. Label each chunk with consecutive ID
+            for i in range(len(chunks)):
+                byte_index = i // 8
+                bit_index = i % 8
+                received = (bitmap[byte_index] >> bit_index) & 1
+                if not received:
+                    chunk = chunks[i]
+                    header = struct.pack("!III", i, len(chunks), len(chunk))
+                    packet = header + chunk
+                    self.UDP_socket.sendto(packet, (self.server_host, self.server_port + 1))
+
+            try:
+                # try to send "probe" signal to the server through TCP network.
+                TCP_sock.sendall(b"P")  # "probe" signal
+                signal = TCP_sock.recv(1)
+                if signal == b"S":  # "stop" signal
+                    break
+                elif signal == b"B":  # "bitmap signal"
+                    bitmap = TCP_sock.recv(len(bitmap))
+                else:
+                    raise ValueError(f"cannot recognize signal from server: {signal}")
+            except Exception as e:
+                print("send_data_MLT: ", e)
+                break
+
+        TCP_sock.setblocking(True)
+        # self.end_time = time.perf_counter()
+        # self.calc_network_latency(is_send=True)
 
 
     def recv_send(self):
