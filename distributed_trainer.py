@@ -39,13 +39,24 @@ class DistributedTrainer(Trainer):
         # Initialize parent class with remaining arguments
         super().__init__(*args, **kwargs)
 
-    def send_data(self, sock, data):
+    def _process_send_data(self, sock, data):
+        """
+        Process data to be sent over the socket.
+        This method is used to NOT send the entire dictionary at once,
+        but rather to send the keys and values separately.
+        This allows to recover the data even if some packets are lost during transmission.
+        """
+        assert isinstance(data, dict), "Data should be a dictionary"
+        
+        # Send each key/value one by one
+        for key, value in data.items():
+            self._send_data(sock, key)
+            self._send_data(sock, value)
+
+    def _send_data(self, sock, data):
         data_bytes = pickle.dumps(data)
-        self.start_time = time.perf_counter()
         sock.sendall(struct.pack("!I", len(data_bytes)))
         sock.sendall(data_bytes)
-        self.end_time = time.perf_counter()
-        self.calc_network_latency(True)
 
     def recv_data(self, sock):
         # First receive the ACK from the server
@@ -75,7 +86,7 @@ class DistributedTrainer(Trainer):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.connect((self.server_host, self.server_port))
             print(f"Worker {self.worker_id} connected to server.")
-            self.send_data(s, gradients)
+            self._send_data(s, gradients)
             avg_gradients = self.recv_data(s)
             if avg_gradients is None:
                 return False, None

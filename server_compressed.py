@@ -138,6 +138,24 @@ class Server:
         self.worker_eval_acc.clear()
         self.worker_epochs.clear()
 
+    def _recv_helper(self, conn):
+        """Helper function to receive data from a connection"""
+        # Receive the size of the incoming data
+        size_data = self.recv_all(conn, 4)
+        if not size_data:
+            return None
+        size = struct.unpack("!I", size_data)[0]
+
+        # Receive the actual data
+        data = self.recv_all(conn, size)
+        if not data:
+            return None
+
+        # response with ACK
+        conn.sendall(b"A")
+
+        return pickle.loads(data)
+
     def recv_send(self):
         """Receive gradients from all workers and send back averaged gradients"""
         gradients = []
@@ -172,6 +190,20 @@ class Server:
 
             gradients.append(grad)
             # print(f"Received gradients from worker {self.conn_addr_map[conn]}")
+
+        print(f"type of data: {type(grad)}")
+        if isinstance(grad, dict):
+            keys = list(grad.keys())
+            num_keys = len(keys)
+        
+            print(f"number of key-value pairs received: {num_keys}")
+            # print(f"keys: {keys}")
+            for key in keys:
+                print(
+                    f"key: {key}, value shape: {grad[key].shape}, value size: {grad[key].numel()}, "
+                    f"value type: {type(grad[key])}, dtype: {grad[key].dtype}"
+                )
+                print(f"value:{grad[key]}")
 
         # Received gradients from all workers
         # print("All gradients received.")
