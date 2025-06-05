@@ -65,3 +65,5 @@ TORCH_TO_NUMPY_DTYPE = {
     torch.uint8: np.uint8,
     torch.bool: np.bool_,  # Note: NumPy's boolean type is np.bool_
 }
+
+STR_TO_NUMPY_DTYPE = {str(k): v for k, v in TORCH_TO_NUMPY_DTYPE.items()}

@@ -93,7 +93,8 @@ class DistributedTrainer(Trainer):
 
         # 1. Key serialization
         key_bytes = key.encode("utf-8")
-        packed_key_len = struct.pack(">I", len(key_bytes))
+        # !I is unsigned int, 4 bytes
+        packed_key_len = struct.pack("!I", len(key_bytes))
 
         # 2. Dtype string serialization
         dtype_str = TORCH_DTYPE_TO_STR.get(tensor.dtype)
@@ -113,14 +114,16 @@ class DistributedTrainer(Trainer):
                 )
 
         dtype_str_bytes = dtype_str.encode("utf-8")
-        packed_dtype_str_len = struct.pack(">H", len(dtype_str_bytes))
+        # !H is unsigned short, 2 bytes
+        packed_dtype_str_len = struct.pack("!H", len(dtype_str_bytes))
 
         # 3. Shape serialization
         shape = tensor.shape
         num_dimensions = len(shape)
-        packed_num_dimensions = struct.pack(">B", num_dimensions)
+        # !B is unsigned char, 1 byte
+        packed_num_dimensions = struct.pack("!B", num_dimensions)
         # Pack each dimension
-        packed_shape_dims = b"".join(struct.pack(">I", dim) for dim in shape)
+        packed_shape_dims = b"".join(struct.pack("!I", dim) for dim in shape)
 
         # 4. Tensor data serialization
         # Ensure tensor is on CPU before converting to NumPy array
@@ -130,7 +133,7 @@ class DistributedTrainer(Trainer):
         # For gradient values, .cpu() is the primary concern.
         tensor_numpy = tensor.cpu().numpy()
         tensor_data_bytes = tensor_numpy.tobytes()
-        packed_tensor_data_len = struct.pack(">Q", len(tensor_data_bytes))
+        packed_tensor_data_len = struct.pack("!Q", len(tensor_data_bytes))
         
         # 5. send everything but the tensor data bytes through TCP
         # tensor_data_bytes is sent separately via MLT protocol
@@ -266,24 +269,18 @@ class DistributedTrainer(Trainer):
 
                 signal = tcp_sock.recv(1)
                 if not signal:  # Connection closed or _recv_all_tcp failed
-                    if DEBUG:
-                        print(
-                            "MLT: Failed to receive signal from server or connection closed after probe."
-                        )
+                    print(
+                        "MLT: Failed to receive signal from server or connection closed after probe."
+                    )
                     return False
 
-                if DEBUG:
-                    print(f"MLT: Received signal '{signal}' from server.")
-
                 if signal == b"S":  # "Stop" signal
-                    if DEBUG:
-                        print(
-                            "MLT: Received 'Stop' (S). Transmission for this gradient complete."
-                        )
+                    print(
+                        "MLT: Received 'Stop' (S). Transmission for this gradient complete."
+                    )
                     return True
                 elif signal == b"B":  # "Bitmap" signal
-                    if DEBUG:
-                        print(
+                    print(
                             "MLT: Received 'Bitmap' (B)"
                         )
 
@@ -295,10 +292,9 @@ class DistributedTrainer(Trainer):
                     ):
                         # We sent chunks, but the bitmap didn't change.
                         no_progress_rounds += 1
-                        if DEBUG:
-                            print(
-                                f"MLT: No change in bitmap after sending chunks. Progress stalled ({no_progress_rounds}/{max_retries_no_progress})."
-                            )
+                        print(
+                            f"MLT: No change in bitmap after sending chunks. Progress stalled ({no_progress_rounds}/{max_retries_no_progress})."
+                        )
                     else:
                         no_progress_rounds = 0  # Progress was made
 
@@ -315,8 +311,7 @@ class DistributedTrainer(Trainer):
                         (server_ack_bitmap[i // 8] >> (i % 8)) & 1
                         for i in range(num_chunks)
                     ):
-                        if DEBUG:
-                            print(
+                        print(
                                 "MLT: All chunks appear to be acknowledged by bitmap. Next probe should yield 'S'."
                             )
                         # We still send 'P' and let server confirm with 'S'.
@@ -479,7 +474,11 @@ class DistributedTrainer(Trainer):
             s.connect((self.server_host, self.server_port))
             print(f"Worker {self.worker_id} connected to server.")
             if self.protocol == "MLT":
-                # Send data using MLT protocol
+                # first send how many subgradients (key-val pairs) are in the gradients
+                num_subgradients = len(gradients)
+                s.sendall(struct.pack("!I", num_subgradients))
+
+                # Send everything inside gradient key-val pair by key-val pair
                 for key, tensor in gradients.items():
                     self.serialize_gradient_to_custom_binary(s, key, tensor)
             else:                            
