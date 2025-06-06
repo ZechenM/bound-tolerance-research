@@ -1,17 +1,17 @@
-from compression import *
-import torch
 import numpy as np
+import torch
 
-# config 1: define compression method
-compression_method = ["no_compress", "rle", "self_quant", "baseline"][0]  # define compression method here by change index
-compression_mapping = {
-    "no_compress": (no_compress, no_compress),
-    "rle": (rle_compress, rle_decompress),
-    "self_quant": (quantize_lossy_compress, quantize_lossy_decompress),
-    "baseline": (baseline_quantize, baseline_dequantize),  # convert float32 to float16 and vice versa
-}
 
-compress, decompress = compression_mapping[compression_method]
+# config 1: define compression method (DEPRECATED)
+# compression_method = ["no_compress", "rle", "self_quant", "baseline"][0]  # define compression method here by change index
+# compression_mapping = {
+#     "no_compress": (no_compress, no_compress),
+#     "rle": (rle_compress, rle_decompress),
+#     "self_quant": (quantize_lossy_compress, quantize_lossy_decompress),
+#     "baseline": (baseline_quantize, baseline_dequantize),  # convert float32 to float16 and vice versa
+# }
+# 
+# compress, decompress = compression_mapping[compression_method]
 
 
 # config 2: debug mode
@@ -27,9 +27,10 @@ DEBUG = 0
 protocol = ["TCP", "MLT"][1]
 
 # config 6: bounded-loss tolerance
-loss_tolerance = 0.03
+loss_tolerance = 0
+chunk_size = 1024
 
-# --- Mappings for Dtypes ---
+# config 7: Mappings for Dtypes 
 # These mappings help convert between torch.dtype, its string representation,
 # and the corresponding numpy.dtype needed for some operations.
 

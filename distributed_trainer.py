@@ -1,16 +1,18 @@
 import pickle
+import select
 import socket
 import struct
 import time
+import traceback
+from typing import List
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import Trainer
-from typing import List
-import select
-import traceback
-from config import TORCH_DTYPE_TO_STR, STR_TO_TORCH_DTYPE, TORCH_TO_NUMPY_DTYPE
+
+import mlt
+from config import STR_TO_TORCH_DTYPE, TORCH_DTYPE_TO_STR, TORCH_TO_NUMPY_DTYPE
 
 DEBUG = 1
 
@@ -66,7 +68,7 @@ class DistributedTrainer(Trainer):
         sock.sendall(data_bytes)
         self.end_time = time.perf_counter()
         self.calc_network_latency(True)
-    
+
     # --- Serialization Function ---
     def serialize_gradient_to_custom_binary(self, tcp_sock: socket.socket, key: str, tensor: torch.Tensor) -> dict[str, bytes]:
         """
@@ -109,9 +111,7 @@ class DistributedTrainer(Trainer):
                 STR_TO_TORCH_DTYPE[dtype_str] = tensor.dtype  #  Attempt dynamic addition
             if tensor.dtype not in TORCH_TO_NUMPY_DTYPE:
                 # This would be an issue for deserialization if no numpy equivalent is known
-                raise ValueError(
-                    f"Unsupported tensor dtype for serialization: {tensor.dtype}. No NumPy equivalent mapped."
-                )
+                raise ValueError(f"Unsupported tensor dtype for serialization: {tensor.dtype}. No NumPy equivalent mapped.")
 
         dtype_str_bytes = dtype_str.encode("utf-8")
         # !H is unsigned short, 2 bytes
@@ -134,18 +134,20 @@ class DistributedTrainer(Trainer):
         tensor_numpy = tensor.cpu().numpy()
         tensor_data_bytes = tensor_numpy.tobytes()
         packed_tensor_data_len = struct.pack("!Q", len(tensor_data_bytes))
-        
+
         # 5. send everything but the tensor data bytes through TCP
         # tensor_data_bytes is sent separately via MLT protocol
-        metadata_bytes = b"".join([
-            packed_key_len,
-            key_bytes,
-            packed_dtype_str_len,
-            dtype_str_bytes,
-            packed_num_dimensions,
-            packed_shape_dims,
-            packed_tensor_data_len,
-        ])
+        metadata_bytes = b"".join(
+            [
+                packed_key_len,
+                key_bytes,
+                packed_dtype_str_len,
+                dtype_str_bytes,
+                packed_num_dimensions,
+                packed_shape_dims,
+                packed_tensor_data_len,
+            ]
+        )
         tcp_sock.sendall(metadata_bytes)
         self.send_data_MLT(tcp_sock, tensor_data_bytes)
 
@@ -153,9 +155,7 @@ class DistributedTrainer(Trainer):
         """Serialize gradient and break into chunks"""
         return [data_bytes[i : i + self.chunk_size] for i in range(0, len(data_bytes), self.chunk_size)]
 
-    def send_data_MLT(
-        self, tcp_sock: socket.socket, gradient_payload_bytes: bytes
-    ) -> bool:
+    def send_data_MLT(self, tcp_sock: socket.socket, gradient_payload_bytes: bytes) -> bool:
         """
         Sends gradient data using the MLT protocol.
         Returns True on success, False on failure.
@@ -180,9 +180,7 @@ class DistributedTrainer(Trainer):
             # Local bitmap representing chunks acknowledged by the server.
             # Initially, all are 0 (server has not acknowledged any).
             server_ack_bitmap = bytearray((num_chunks + 7) // 8)
-            max_retries_no_progress = (
-                3  # Number of rounds with no new acks before aborting
-            )
+            max_retries_no_progress = 3  # Number of rounds with no new acks before aborting
             no_progress_rounds = 0
 
             while True:  # Retransmission loop
@@ -191,26 +189,20 @@ class DistributedTrainer(Trainer):
                 # Using a very short timeout for a non-blocking check.
                 ready_to_read, _, _ = select.select([tcp_sock], [], [], 0.001)
                 if tcp_sock in ready_to_read:
-                    signal = tcp_sock.recv(
-                        1
-                    )  # Read just 1 byte non-blockingly (due to select)
+                    signal = tcp_sock.recv(1)  # Read just 1 byte non-blockingly (due to select)
                     if not signal:  # Connection closed
                         if DEBUG:
                             print("MLT: TCP connection closed by server (early check).")
                         return False
                     if signal == b"S":
                         if DEBUG:
-                            print(
-                                "MLT: Received early 'Stop' (S) from server. Transmission for this gradient complete."
-                            )
+                            print("MLT: Received early 'Stop' (S) from server. Transmission for this gradient complete.")
                         return True
                     else:
                         # This is unexpected if server only sends S/B in response to P.
                         # Could log or handle as an error. For now, we might proceed,
                         # but it could indicate a de-sync.
-                        print(
-                            f"MLT: Warning - Unexpected TCP data '{signal}' during early check. Proceeding with caution."
-                        )
+                        print(f"MLT: Warning - Unexpected TCP data '{signal}' during early check. Proceeding with caution.")
 
                 # --- Phase 2: Send/Resend UDP chunks based on server_ack_bitmap ---
                 chunks_sent_this_round = 0
@@ -220,9 +212,7 @@ class DistributedTrainer(Trainer):
                     if not ((server_ack_bitmap[byte_idx] >> bit_idx) & 1):
                         chunk_payload = chunks[i]
                         # Header: chunk_id (0-indexed), total_chunks, payload_length_of_this_chunk
-                        header = struct.pack(
-                            "!III", i, num_chunks, len(chunk_payload)
-                        )
+                        header = struct.pack("!III", i, num_chunks, len(chunk_payload))
                         packet_to_send = header + chunk_payload
                         try:
                             # TODO: is (self.server_host, self.server_port + 1) correct?
@@ -235,9 +225,7 @@ class DistributedTrainer(Trainer):
                             # Log UDP send error but continue; rely on bitmap retransmission
                             print(f"MLT: UDP sendto error for chunk {i}: {e}")
                 if DEBUG:
-                    print(
-                        f"MLT: Sent {chunks_sent_this_round} UDP chunks this round."
-                    )
+                    print(f"MLT: Sent {chunks_sent_this_round} UDP chunks this round.")
 
                 # --- Phase 3: Send "Probe" (P) signal via TCP ---
                 if DEBUG:
@@ -253,14 +241,10 @@ class DistributedTrainer(Trainer):
                     print("MLT: Waiting for server response to probe...")
                 # Use select with a reasonable timeout for the server to respond
                 probe_response_timeout = 5.0  # seconds
-                ready_to_read, _, _ = select.select(
-                    [tcp_sock], [], [], probe_response_timeout
-                )
+                ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
 
                 if not ready_to_read:
-                    print(
-                        f"MLT: Timeout ({probe_response_timeout}s) waiting for server response to 'Probe'."
-                    )
+                    print(f"MLT: Timeout ({probe_response_timeout}s) waiting for server response to 'Probe'.")
                     no_progress_rounds += 1
                     if no_progress_rounds >= max_retries_no_progress:
                         print("MLT: Max retries with no progress reached. Aborting.")
@@ -269,51 +253,33 @@ class DistributedTrainer(Trainer):
 
                 signal = tcp_sock.recv(1)
                 if not signal:  # Connection closed or _recv_all_tcp failed
-                    print(
-                        "MLT: Failed to receive signal from server or connection closed after probe."
-                    )
+                    print("MLT: Failed to receive signal from server or connection closed after probe.")
                     return False
 
                 if signal == b"S":  # "Stop" signal
-                    print(
-                        "MLT: Received 'Stop' (S). Transmission for this gradient complete."
-                    )
+                    print("MLT: Received 'Stop' (S). Transmission for this gradient complete.")
                     return True
                 elif signal == b"B":  # "Bitmap" signal
-                    print(
-                            "MLT: Received 'Bitmap' (B)"
-                        )
+                    print("MLT: Received 'Bitmap' (B)")
 
                     new_bitmap_data = tcp_sock.recv(len(server_ack_bitmap))
                     # Check if bitmap indicates progress
-                    if (
-                        bytearray(new_bitmap_data) == server_ack_bitmap
-                        and chunks_sent_this_round > 0
-                    ):
+                    if bytearray(new_bitmap_data) == server_ack_bitmap and chunks_sent_this_round > 0:
                         # We sent chunks, but the bitmap didn't change.
                         no_progress_rounds += 1
-                        print(
-                            f"MLT: No change in bitmap after sending chunks. Progress stalled ({no_progress_rounds}/{max_retries_no_progress})."
-                        )
+                        print(f"MLT: No change in bitmap after sending chunks. Progress stalled ({no_progress_rounds}/{max_retries_no_progress}).")
                     else:
                         no_progress_rounds = 0  # Progress was made
 
                     server_ack_bitmap = bytearray(new_bitmap_data)
                     if no_progress_rounds >= max_retries_no_progress:
-                        print(
-                            f"MLT: Max retries ({max_retries_no_progress}) with no progress in bitmap. Aborting."
-                        )
+                        print(f"MLT: Max retries ({max_retries_no_progress}) with no progress in bitmap. Aborting.")
                         return False
 
                     # Check if all chunks are now acknowledged (optional optimization here,
                     # as the loop condition and server sending 'S' is the primary completion mechanism)
-                    if num_chunks > 0 and all(
-                        (server_ack_bitmap[i // 8] >> (i % 8)) & 1
-                        for i in range(num_chunks)
-                    ):
-                        print(
-                                "MLT: All chunks appear to be acknowledged by bitmap. Next probe should yield 'S'."
-                            )
+                    if num_chunks > 0 and all((server_ack_bitmap[i // 8] >> (i % 8)) & 1 for i in range(num_chunks)):
+                        print("MLT: All chunks appear to be acknowledged by bitmap. Next probe should yield 'S'.")
                         # We still send 'P' and let server confirm with 'S'.
                 else:
                     print(f"MLT: Unrecognized signal '{signal}' from server.")
@@ -480,8 +446,9 @@ class DistributedTrainer(Trainer):
 
                 # Send everything inside gradient key-val pair by key-val pair
                 for key, tensor in gradients.items():
-                    self.serialize_gradient_to_custom_binary(s, key, tensor)
-            else:                            
+                    tensor_data: bytes = mlt.serialize_gradient_to_custom_binary(s, key, tensor)
+                    mlt.send_data_MLT(s, tensor_data)
+            else:
                 self.send_data(s, gradients)
             avg_gradients = self.recv_data(s)
             if avg_gradients is None:

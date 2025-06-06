@@ -1,15 +1,16 @@
 #!/root/bound-tolerance-research/.venv/bin/python3.12
 
-from mininet.net import Mininet
-from mininet.node import RemoteController, OVSKernelSwitch
-from mininet.cli import CLI
-from mininet.log import setLogLevel, info
-from mininet.topo import Topo
-from mininet.link import TCLink
-import time
 import os
+import time
+
+from mininet.link import TCLink
+from mininet.log import info, setLogLevel
+from mininet.net import Mininet
+from mininet.node import OVSKernelSwitch, RemoteController
+from mininet.topo import Topo
 
 PYTHON = "/root/bound-tolerance-research/.venv/bin/python3.12"
+
 
 class WorkerServerTopo(Topo):
     """
@@ -24,18 +25,17 @@ class WorkerServerTopo(Topo):
         Topo.__init__(self, **opts)
 
         # add nodes (hosts: servers and workers; switch)
-        server = self.addHost('server')
-        worker0 = self.addHost('worker0')
-        worker1 = self.addHost('worker1')
-        worker2 = self.addHost('worker2')
+        server = self.addHost("server")
+        worker0 = self.addHost("worker0")
+        worker1 = self.addHost("worker1")
+        worker2 = self.addHost("worker2")
 
         # using default openVswitch (OVS) kernel switch
-        s1 = self.addSwitch('s1')
+        s1 = self.addSwitch("s1")
 
         # Define link characteristics
-        link_opts_base = dict(bw=100, delay='1ms', loss=0, max_queue_size=1000, use_htb=True)
-        link_opts_server = dict(bw=1000, delay='1ms', loss=0, max_queue_size=1000, use_htb=True)
-
+        link_opts_base = dict(bw=100, delay="1ms", loss=0, max_queue_size=1000, use_htb=True)
+        link_opts_server = dict(bw=1000, delay="1ms", loss=0, max_queue_size=1000, use_htb=True)
 
         info("*** Adding Worker Links with Loss:\n")
         info(f"* Worker i <-> Switch: {link_opts_base}\n")
@@ -48,6 +48,7 @@ class WorkerServerTopo(Topo):
         info(f"*** Adding Server Link:\n* Server <-> Switch: {link_opts_base}\n")
         self.addLink(server, s1, **link_opts_server)
 
+
 def run_experiment():
     """
     Creates the network, runs the distributed ML applications, and starts the CLI.
@@ -55,7 +56,7 @@ def run_experiment():
     # --- Configuration ---
     # Assumes your project scripts are located here within the Mininet VM/environment
     # Adjust this path if your scripts are located elsewhere
-    PROJECT_DIR = "/root/bound-tolerance-research"  
+    PROJECT_DIR = "/root/bound-tolerance-research"
 
     SERVER_SCRIPT = f"{PROJECT_DIR}/server_compressed.py"
     WORKER_SCRIPT = f"{PROJECT_DIR}/worker_trainer.py"
@@ -111,12 +112,10 @@ def run_experiment():
     # TODO: figure out if "runs in background is needed or not"
     server_cmd = f"{PYTHON} -u {SERVER_SCRIPT} --host {server_ip} --port {INITIAL_SERVER_PORT}"
     info(f"Executing on server: {server_cmd}\n")
-        
+
     # Create log file for redirecting output
     os.makedirs(os.path.dirname(SERVER_LOG), exist_ok=True)
-    server_proc = server_node.popen(server_cmd.split(),
-                                    stdout=open(SERVER_LOG, 'w'),
-                                    stderr=open(SERVER_LOG, 'a'))
+    server_proc = server_node.popen(server_cmd.split(), stdout=open(SERVER_LOG, "w"), stderr=open(SERVER_LOG, "a"))
 
     # Give the server a moment to start up and bind to the port
     info("*** Waiting for server to initialize...\n")
@@ -124,39 +123,26 @@ def run_experiment():
 
     info("*** Starting Worker Applications...\n")
     # Using popen for better process management
-    
+
     # Create log files for redirecting output
     for log_file in [WORKER0_LOG, WORKER1_LOG, WORKER2_LOG]:
-            os.makedirs(os.path.dirname(log_file), exist_ok=True)
-                        
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
     # Commands to start the workers, passing worker ID, server IP, and server port
     # Worker 0
-    worker0_cmd = (
-        f"{PYTHON} -u {WORKER_SCRIPT} 0 {server_ip} {INITIAL_SERVER_PORT}"
-    )
+    worker0_cmd = f"{PYTHON} -u {WORKER_SCRIPT} 0 {server_ip} {INITIAL_SERVER_PORT}"
     info(f"Executing on worker0: {worker0_cmd}\n")
-    worker0_proc = worker0_node.popen(worker0_cmd.split(),
-                                    stdout = open(WORKER0_LOG, 'w'),
-                                    stderr = open(WORKER0_LOG, 'a'))
+    worker0_proc = worker0_node.popen(worker0_cmd.split(), stdout=open(WORKER0_LOG, "w"), stderr=open(WORKER0_LOG, "a"))
 
     # Worker 1
-    worker1_cmd = (
-        f"{PYTHON} -u {WORKER_SCRIPT} 1 {server_ip} {INITIAL_SERVER_PORT}"
-    )
+    worker1_cmd = f"{PYTHON} -u {WORKER_SCRIPT} 1 {server_ip} {INITIAL_SERVER_PORT}"
     info(f"Executing on worker1: {worker1_cmd}\n")
-    worker1_proc = worker1_node.popen(worker1_cmd.split(),
-                                    stdout = open(WORKER1_LOG, 'w'),
-                                    stderr = open(WORKER1_LOG, 'a'))
-
+    worker1_proc = worker1_node.popen(worker1_cmd.split(), stdout=open(WORKER1_LOG, "w"), stderr=open(WORKER1_LOG, "a"))
 
     # Worker 2
-    worker2_cmd = (
-        f"{PYTHON} -u {WORKER_SCRIPT} 2 {server_ip} {INITIAL_SERVER_PORT}"
-    )
+    worker2_cmd = f"{PYTHON} -u {WORKER_SCRIPT} 2 {server_ip} {INITIAL_SERVER_PORT}"
     info(f"Executing on worker2: {worker2_cmd}\n")
-    worker2_proc = worker2_node.popen(worker2_cmd.split(),
-                                    stdout = open(WORKER2_LOG, 'w'),
-                                    stderr = open(WORKER2_LOG, 'a'))
+    worker2_proc = worker2_node.popen(worker2_cmd.split(), stdout=open(WORKER2_LOG, "w"), stderr=open(WORKER2_LOG, "a"))
 
     # --- End Application Start ---
 
@@ -171,9 +157,7 @@ def run_experiment():
     info(f"*** Worker 1 log: {worker1_node.name}:{WORKER1_LOG}\n")
     info(f"*** Worker 2 log: {worker2_node.name}:{WORKER2_LOG}\n")
     info("*** Starting Mininet CLI. Type 'exit' to quit and stop the network.\n")
-    info(
-        f"*** You can monitor logs using commands like: tail -f {WORKER0_LOG}\n"
-    )
+    info(f"*** You can monitor logs using commands like: tail -f {WORKER0_LOG}\n")
 
     try:
         while True:
@@ -191,8 +175,8 @@ def run_experiment():
     # # Stop of network emulation and clean up resources
     # net.stop()
 
-if __name__ == '__main__':
-    topos = {'mltopo': ( lambda:  WorkerServerTopo() ) }
-    setLogLevel('info')
-    run_experiment()
 
+if __name__ == "__main__":
+    topos = {"mltopo": (lambda: WorkerServerTopo())}
+    setLogLevel("info")
+    run_experiment()

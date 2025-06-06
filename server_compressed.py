@@ -1,25 +1,17 @@
-import numpy as np
 import argparse
 import pickle
 import random
+import select
 import socket
 import struct
 from enum import Enum
 
+import numpy as np
 import torch
 
-from compression import *
-from config import (
-    TORCH_DTYPE_TO_STR,
-    STR_TO_TORCH_DTYPE,
-    TORCH_TO_NUMPY_DTYPE,
-    STR_TO_NUMPY_DTYPE,
-)
-import select
-
-DEBUG = 1
-
-print(f"Compression Method: {compression_method}")
+import config
+import mlt
+from config import STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE
 
 
 class TrainingPhase(Enum):
@@ -55,14 +47,14 @@ class Server:
         self.zeroed_params = 0
 
         # gradient communication protocal configurations
-        self.protocol = protocol
+        self.protocol = config.protocol
         if self.protocol == "MLT":
             self.chunk_size = 1024  # TODO: avoid hard-coding. Make it automatically aligh with the trainer.
             self.send_data = self.send_data_TCP  # TODO: MLT send is not working now, need UDP port. Temp using TCP
             self.recv_data = self.recv_data_MLT
             self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.UDP_socket.bind(("0.0.0.0", self.port + 1))  # TODO: each worker should allocate one UDP socket
-            self.loss_tolerance = loss_tolerance
+            self.loss_tolerance = config.loss_tolerance
         elif self.protocol == "TCP":
             self.send_data = self.send_data_TCP
             self.recv_data = self.recv_data_TCP
@@ -160,7 +152,6 @@ class Server:
         self.worker_eval_acc.clear()
         self.worker_epochs.clear()
 
-
     def recv_data_TCP(self, TCP_sock):
         # Receive the size of the incoming data
         size_data = self.recv_all(TCP_sock, 4)
@@ -177,8 +168,7 @@ class Server:
         # response with ACK
         # TCP_sock.sendall(b"A")
 
-        compressed_grad = pickle.loads(data)
-        grad = decompress(compressed_grad)
+        grad = pickle.loads(data)
 
         if "eval_acc" in grad:
             self.has_eval_acc = True
@@ -186,9 +176,8 @@ class Server:
             self.worker_epochs.append(grad["epoch"])
             del grad["epoch"]
             del grad["eval_acc"]
-        
-        return grad
 
+        return grad
 
     def recv_data_MLT(self, TCP_sock):
         # there will be 3 connections from each worker
@@ -200,7 +189,7 @@ class Server:
         # we are sending gradients layer by layer, so key-val pair will be reconstructed iteration by iteration
         num_sub_gradients = struct.unpack("!I", num_sub_gradients)[0]
         final_gradients_dict = {}
-        
+
         for _ in range(num_sub_gradients):
             # 1. key deserialization
             # 1.1. receive the length of packed value and UNPACK it
@@ -216,7 +205,7 @@ class Server:
             key_str = key_bytes.decode("utf-8")
             # Initialize with None
             # to be filled out during UDP transmission
-            final_gradients_dict[key_str] = None  
+            final_gradients_dict[key_str] = None
 
             # 2. dtype string deserialization
             # 2.1. ...
@@ -230,14 +219,14 @@ class Server:
             if not dtype_str_bytes:
                 return None
             dtype_str = dtype_str_bytes.decode("utf-8")
-            
+
             torch_dtype = STR_TO_TORCH_DTYPE.get(dtype_str, None)
             numpy_dtype = STR_TO_NUMPY_DTYPE.get(dtype_str, None)
             if not torch_dtype or not numpy_dtype:
                 raise ValueError(f"Unsupported dtype: {dtype_str}")
-            
+
             # 3. shape deserialization
-            # 3.1 
+            # 3.1
             packed_num_dimensions = self.recv_all(TCP_sock, 1)
             if not packed_num_dimensions:
                 return None
@@ -257,7 +246,7 @@ class Server:
             shape_tuple = tuple(shape_list)
 
             print(f"Shape: {shape_list}")
-            
+
             # 4. UDP for receiving the tensor data (by chunks)
             packed_tensor_data_len = self.recv_all(TCP_sock, 8)
             if not packed_tensor_data_len:
@@ -287,14 +276,16 @@ class Server:
                         if signal == b"P":
                             TCP_sock.sendall(b"B")
                             TCP_sock.sendall(bitmap)
-                            if DEBUG: print(bitmap)
+                            if config.DEBUG:
+                                print(bitmap)
                         else:
                             print(f"recv_data_MLT: cannot recognize signal from server:{signal}")
 
                     if self.UDP_socket in readable:
                         # Receive packet with extra buffer space
                         packet, _ = self.UDP_socket.recvfrom(expected_packet_size + 100)
-                        if DEBUG: print("received packets")
+                        if config.DEBUG:
+                            print("received packets")
                         # Verify minimum packet size
                         if len(packet) < 12:
                             print(f"Packet too small: {len(packet)} bytes")
@@ -323,7 +314,8 @@ class Server:
                         missing_rate = 1 - (received_chunks.count(None) / total_chunks)
                         if missing_rate < self.loss_tolerance:
                             TCP_sock.sendall(b"S")
-                            if DEBUG: print("recv_data_MLT: early termination")
+                            if config.DEBUG:
+                                print("recv_data_MLT: early termination")
                             break
 
                 except socket.timeout:
@@ -342,7 +334,8 @@ class Server:
                 # if chunk not received, fill with 0
                 for i, chunk in enumerate(received_chunks):
                     if chunk == None:
-                        if DEBUG: print("fill with zeros")
+                        if config.DEBUG:
+                            print("fill with zeros")
                         received_chunks[i] = bytes(self.chunk_size)
 
             # 6. Reconstruct original data
@@ -356,9 +349,11 @@ class Server:
                     reconstructed_tensor = torch.empty(shape_tuple, dtype=torch_dtype)
                     print(f"Reconstruction: Empty tensor for '{key_str}'.")
                 elif tensor_data_len_expected != bytes_expected_by_shape_dtype:
-                    print(f"Reconstruction WARNING for '{key_str}': TCP expected_data_len ({tensor_data_len_expected}) "
+                    print(
+                        f"Reconstruction WARNING for '{key_str}': TCP expected_data_len ({tensor_data_len_expected}) "
                         f"mismatches bytes for shape*dtype ({bytes_expected_by_shape_dtype}). "
-                        f"Attempting reconstruction with received buffer of size {len(final_tensor_data_as_bytes)}.")
+                        f"Attempting reconstruction with received buffer of size {len(final_tensor_data_as_bytes)}."
+                    )
                     # If tensor_data_len_expected is not a multiple of itemsize, np.frombuffer might behave unexpectedly
                     # or only read up to the last full element.
                     # It's safer to ensure the buffer used matches bytes_expected_by_shape_dtype if possible,
@@ -367,17 +362,19 @@ class Server:
                         # Use only the part of the buffer that corresponds to the shape
                         buffer_for_reconstruction = final_tensor_data_as_bytes[:bytes_expected_by_shape_dtype]
                         np_array = np.frombuffer(buffer_for_reconstruction, dtype=numpy_dtype)
-                        if np_array.size == num_elements_in_shape: # Check if number of elements is correct
+                        if np_array.size == num_elements_in_shape:  # Check if number of elements is correct
                             np_array = np_array.reshape(shape_tuple)
                             reconstructed_tensor = torch.from_numpy(np_array).to(torch_dtype)
-                        else: # Should not happen if buffer_for_reconstruction was sized correctly
+                        else:  # Should not happen if buffer_for_reconstruction was sized correctly
                             print(f"  Reconstruction ERROR for '{key_str}' (mismatch case): Element count mismatch. Creating zero tensor.")
                             reconstructed_tensor = torch.zeros(shape_tuple, dtype=torch_dtype)
-                    else: # Not enough data in the buffer (even with zero-filling) for the shape
-                        print(f"  Reconstruction ERROR for '{key_str}' (mismatch case): Not enough data in buffer ({len(final_tensor_data_as_bytes)}) for shape ({bytes_expected_by_shape_dtype} bytes needed). Creating zero tensor.")
+                    else:  # Not enough data in the buffer (even with zero-filling) for the shape
+                        print(
+                            f"  Reconstruction ERROR for '{key_str}' (mismatch case): Not enough data in buffer ({len(final_tensor_data_as_bytes)}) for shape ({bytes_expected_by_shape_dtype} bytes needed). Creating zero tensor."
+                        )
                         reconstructed_tensor = torch.zeros(shape_tuple, dtype=torch_dtype)
-                else: # tensor_data_len_expected == bytes_expected_by_shape_dtype
-                    # hopefully every time we fall into this case 
+                else:  # tensor_data_len_expected == bytes_expected_by_shape_dtype
+                    # hopefully every time we fall into this case
                     np_array = np.frombuffer(final_tensor_data_as_bytes, dtype=numpy_dtype)
                     np_array = np_array.reshape(shape_tuple)
                     reconstructed_tensor = torch.from_numpy(np_array).to(torch_dtype)
@@ -386,24 +383,24 @@ class Server:
                 final_gradients_dict[key_str] = reconstructed_tensor
 
             except ValueError as ve:
-                print(f"  Reconstruction ERROR for '{key_str}': ValueError (likely reshape failed due to size mismatch) - {ve}. Creating zero tensor.")
+                print(
+                    f"  Reconstruction ERROR for '{key_str}': ValueError (likely reshape failed due to size mismatch) - {ve}. Creating zero tensor."
+                )
                 final_gradients_dict[key_str] = torch.zeros(shape_tuple, dtype=torch_dtype)
             except Exception as e:
                 print(f"  Reconstruction ERROR for '{key_str}': Unexpected error - {e}. Skipping this gradient from dict.")
                 # Decide if to break or continue for other gradients
                 # break # Safer to break if unexpected reconstruction error occurs
-                continue # Or try to process next gradient if error is isolated
+                continue  # Or try to process next gradient if error is isolated
 
         print(f"\nReceiver: Finished processing loop. Total gradients in dictionary: {len(final_gradients_dict)}")
         return final_gradients_dict
-
 
     def send_data_TCP(self, TCP_sock, gradient):
         # Send the size of the data first
         TCP_sock.sendall(struct.pack("!I", len(gradient)))
         # Sendall the actual data
         TCP_sock.sendall(gradient)
-
 
     def send_data_MLT(self, TCP_sock, gradient):
         # divide the gradients, start the timer and send size information to the server throught TCP
@@ -449,7 +446,6 @@ class Server:
         TCP_sock.setblocking(True)
         # self.end_time = time.perf_counter()
         # self.calc_network_latency(is_send=True)
-
 
     def recv_send(self):
         """Receive gradients from all workers and send back averaged gradients"""
@@ -543,8 +539,7 @@ class Server:
                 self.zeroed_params = 0
 
         # Compress the averaged gradients
-        compressed_avg_gradients = compress(avg_gradients)
-        avg_gradients_data = pickle.dumps(compressed_avg_gradients)
+        # avg_gradients_data = mlt.serialize_
 
         # Send averaged gradients back to all workers
         for conn in self.connections:

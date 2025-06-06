@@ -5,15 +5,13 @@ import sys
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torchvision.models as models
 from sklearn.metrics import accuracy_score
 from transformers import TrainingArguments
 
+import config
 from distributed_trainer import DistributedTrainer
 from my_datasets import CIFAR10Dataset
-
-from config import *
 
 resume_from_checkpoint = False
 
@@ -159,8 +157,8 @@ class Worker:
             server_port=self.server_port,
             worker_id=self.worker_id,
             device=self.device,
-            protocol=protocol,
-            loss_tolerance=loss_tolerance,
+            protocol=config.protocol,
+            loss_tolerance=config.loss_tolerance,
         )
 
         # Start training
