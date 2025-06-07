@@ -9,6 +9,7 @@ import config
 from config import DEBUG, STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE, TORCH_DTYPE_TO_STR, TORCH_TO_NUMPY_DTYPE, chunk_size
 
 
+# Helper function
 def recv_all(conn, size):
     """helper function to receive all data"""
     data = b""
@@ -21,13 +22,14 @@ def recv_all(conn, size):
     return data
 
 
+# Helper function
 def chunk_gradient(data_bytes: bytes) -> list[bytes]:
     """Serialize gradient and break into chunks"""
     return [data_bytes[i : i + chunk_size] for i in range(0, len(data_bytes), chunk_size)]
 
 
 # --- Serialization Function ---
-def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tensor: torch.Tensor):
+def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tensor: torch.Tensor) -> bytes:
     """
     Serializes a key (string) and a tensor (torch.Tensor) into a custom binary format.
 
@@ -123,7 +125,7 @@ def send_data_MLT(socks: dict, server: dict, gradient_payload_bytes: bytes) -> b
     if not isinstance(udp_sock, socket.socket):
         raise TypeError(f"Expected 'udp_sock' to be a socket.socket, got {type(udp_sock)}")
 
-    server_host = str(server["host"])
+    server_host = str(server["ip"])
     server_port = int(server["port"])
 
     chunks = chunk_gradient(gradient_payload_bytes)
@@ -265,7 +267,7 @@ def send_data_MLT(socks: dict, server: dict, gradient_payload_bytes: bytes) -> b
         pass
 
 
-def recv_data_MLT(socks: dict):
+def recv_data_MLT(socks: dict) -> dict[str, torch.Tensor | None] | None:
     tcp_sock = socks.get("tcp")
     udp_sock = socks.get("udp")
 
