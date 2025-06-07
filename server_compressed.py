@@ -158,13 +158,6 @@ class Server:
 
         grad = pickle.loads(data)
 
-        if "eval_acc" in grad:
-            self.has_eval_acc = True
-            self.worker_eval_acc.append(grad["eval_acc"])
-            self.worker_epochs.append(grad["epoch"])
-            del grad["epoch"]
-            del grad["eval_acc"]
-
         return grad
 
     def send_data_TCP(self, TCP_sock, gradient):
@@ -193,11 +186,19 @@ class Server:
                 print(f"Failed to receive data from worker {self.conn_addr_map[conn]}.")
                 continue
 
-            gradients.append(grad)
-            # print(f"Received gradients from worker {self.conn_addr_map[conn]}")
+            if "eval_acc" in grad and "epoch" in grad:
+                self.has_eval_acc = True
+                self.worker_eval_acc.append(grad["eval_acc"])
+                self.worker_epochs.append(grad["epoch"])
+                del grad["epoch"]
+                del grad["eval_acc"]
 
-        # Received gradients from all workers
-        # print("All gradients received.")
+            gradients.append(grad)
+            if config.DEBUG:
+                print(f"Received gradients from worker {self.conn_addr_map[conn]}: {grad.keys()}")
+
+        if config.DEBUG:
+            print(f"Received {len(gradients)} gradients from workers.")
 
         # check accuracy and update training phase accrodingly
         if self.has_eval_acc:
@@ -284,6 +285,22 @@ class Server:
             if self.protocol == "MLT":
                 socks = {"tcp": tcp_sock, "udp": self.UDP_socket}
                 receiver = {"ip": ip, "port": port}
+
+                # Before serializing and send the tensor data, 2 IMPORTANT STEPS
+                # STEP 0: send N signal as the server will NEVER send the E signal
+                try:
+                    tcp_sock.sendall(b"N")
+                except Exception as e:
+                    print(f"Failed to send N signal to worker {self.conn_addr_map[conn]}: {e}")
+                    continue
+                # STEP 1: send how many sub-tensors (subgradients / key-val pairs) will be sent
+                num_subgradients = len(avg_gradients)
+                try:
+                    tcp_sock.sendall(struct.pack("!I", num_subgradients))
+                except Exception as e:
+                    print(f"Failed to send number of subgradients to worker {self.conn_addr_map[conn]}: {e}")
+                    continue
+
                 for key, tensor in avg_gradients.items():
                     # Serialize each tensor to custom binary format
                     averaged_tensor_bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)

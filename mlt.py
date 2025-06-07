@@ -279,6 +279,33 @@ def recv_data_MLT(socks: dict) -> dict[str, torch.Tensor | None] | None:
     if not isinstance(udp_sock, socket.socket):
         raise TypeError(f"Expected 'udp_sock' to be a socket.socket, got {type(udp_sock)}")
 
+    # STEP 0: determine if eval_acc and epoch will be sent from the worker
+    eval_signal = recv_all(tcp_sock, 1)
+    if not eval_signal:
+        print("MLT: Failed to receive eval signal from sender.")
+        return None
+
+    # Case 1: signal is 'E' (eval_acc and epoch will be sent)
+    if eval_signal == b"E":
+        eval_acc_bytes = recv_all(tcp_sock, 4)
+        if not eval_acc_bytes:
+            print("MLT: Failed to receive eval_acc from sender.")
+            return None
+        eval_acc = struct.unpack("!f", eval_acc_bytes)[0]
+
+        epoch_bytes = recv_all(tcp_sock, 4)
+        if not epoch_bytes:
+            print("MLT: Failed to receive epoch from sender.")
+            return None
+        curr_epoch = struct.unpack("!f", epoch_bytes)[0]
+    # Case 2: signal is 'N' (no eval_acc and epoch will be sent)
+    elif eval_signal == b"N":
+        # No eval_acc and epoch will be sent
+        pass
+    else:
+        print(f"MLT: Unrecognized eval signal '{eval_signal}'. Expected 'E' or 'N'.")
+        return None
+
     # for each worker, all the important metadata will always be received first through TCP
     num_sub_gradients = recv_all(tcp_sock, 4)
     if not num_sub_gradients:
@@ -491,4 +518,9 @@ def recv_data_MLT(socks: dict) -> dict[str, torch.Tensor | None] | None:
             continue  # Or try to process next gradient if error is isolated
 
     print(f"\nReceiver: Finished processing loop. Total gradients in dictionary: {len(final_gradients_dict)}")
+    if eval_signal == b"E":
+        print("Will add 2 extra key-val pairs to gradients dict:")
+        print(f"    eval_acc = {eval_acc}, curr_epoch = {curr_epoch}")
+        final_gradients_dict["eval_acc"] = eval_acc
+        final_gradients_dict["epoch"] = curr_epoch
     return final_gradients_dict

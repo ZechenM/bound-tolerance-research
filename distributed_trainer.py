@@ -77,9 +77,36 @@ class DistributedTrainer(Trainer):
             s.connect((self.server_host, self.server_port))
             print(f"Worker {self.worker_id} connected to server.")
             if self.protocol == "MLT":
-                # first send how many subgradients (key-val pairs) are in the gradients
+                # STEP 0: tell the receiver if we are sending eval_acc and epoch
+                if self.sent_eval:
+                    try:
+                        s.sendall(b"E")
+                    except Exception as e:
+                        print(f"Error sending eval signal: {e}")
+
+                    # send eval_acc and epoch which are 2 float values: self.eval_acc and self.curr_epoch
+                    # !f == >f for float, 4 bytes
+
+                    eval_acc_bytes = struct.pack("!f", self.eval_acc)
+                    epoch_bytes = struct.pack("!f", self.curr_epoch)
+                    try:
+                        s.sendall(eval_acc_bytes)
+                        s.sendall(epoch_bytes)
+                    except Exception as e:
+                        print(f"Error sending eval_acc and epoch: {e}")
+                    print(f"Worker {self.worker_id} sent eval_acc: {self.eval_acc}, epoch: {self.curr_epoch}")
+                else:
+                    try:
+                        s.sendall(b"N")
+                    except Exception as e:
+                        print(f"Error sending no eval signal: {e}")
+
+                # STEP 1: send how many subgradients (key-val pairs) are in the gradients
                 num_subgradients = len(gradients)
-                s.sendall(struct.pack("!I", num_subgradients))
+                try:
+                    s.sendall(struct.pack("!I", num_subgradients))
+                except Exception as e:
+                    print(f"Error sending number of subgradients: {e}")
 
                 socks = {"tcp": s, "udp": self.UDP_socket}
                 server = {"ip": self.server_host, "port": self.server_port}
@@ -135,17 +162,16 @@ class DistributedTrainer(Trainer):
         print(f"Training Step Running - Worker {self.worker_id}, Current Epoch: {current_epoch}")
 
         # evaluate the model at the end of each epoch
-        sent_eval = False
+        self.sent_eval = False
         if current_epoch is not None:
             epoch_diff = current_epoch - self.past_epoch
             if abs(int(current_epoch) - current_epoch) < 1e-10 and epoch_diff > 0.999 or current_epoch == 0:
                 self.past_epoch = current_epoch
                 eval_results = self.evaluate()
-                eval_acc = eval_results["eval_accuracy"]
-                curr_epoch = eval_results["epoch"]
-                sent_eval = True
-
-                print(f"Sent to server eval acc {eval_acc} at epoch {current_epoch}.")
+                self.eval_acc = eval_results["eval_accuracy"]
+                self.curr_epoch = eval_results["epoch"]
+                self.sent_eval = True
+                print(f"Current epoch: {current_epoch}, Self curr epoch: {self.curr_epoch}")
 
         # Handle empty inputs - this should not happen if get_train_dataloader is working properly
         if not inputs or not isinstance(inputs, dict) or "pixel_values" not in inputs:
@@ -171,10 +197,12 @@ class DistributedTrainer(Trainer):
         loss.backward()
 
         # Get gradients and ensure they're on CPU for communication
-        gradients = {name: param.grad.cpu() for name, param in model.named_parameters() if param.grad is not None}
-        if sent_eval:
-            gradients["eval_acc"] = eval_acc
-            gradients["epoch"] = curr_epoch
+        gradients: dict[str, torch.Tensor | float] = {name: param.grad.cpu() for name, param in model.named_parameters() if param.grad is not None}
+        # ZM 6/7/2025: for MLT, we don't add these 2 fields to the gradients dictionary
+        # instead, we send a signal to tell the receiver whether we are sending them or not
+        if self.sent_eval and self.protocol == "TCP":
+            gradients["eval_acc"] = self.eval_acc
+            gradients["epoch"] = self.curr_epoch
 
         # Send gradients to server and receive averaged gradients
         update, avg_gradients = self.send_recv(gradients)
@@ -184,6 +212,8 @@ class DistributedTrainer(Trainer):
             return loss.detach()
 
         # Update model parameters with averaged gradients
+        # ZM 6/7/2025: that is like an extra check that we won't
+        # include the custom key-val pairs in the gradients
         with torch.no_grad():
             for name, param in model.named_parameters():
                 if name in avg_gradients:
