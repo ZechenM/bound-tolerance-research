@@ -1,13 +1,13 @@
-import torch
-import struct
-import socket
-import sys
 import os
+import socket
+import struct
+import sys
+
+import torch
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import mlt
-
 
 # TCP socket
 tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -23,7 +23,7 @@ print("Server listening on UDP port 6001...")
 conn, addr = tcp_sock.accept()
 print(f"Connection established with {addr}")
 
-socks = {'tcp': conn, 'udp': udp_sock}
+socks = {"tcp": conn, "udp": udp_sock}
 grad = mlt.recv_data_MLT(socks)
 
 if grad is None:
@@ -33,10 +33,10 @@ if grad is None:
 # so we are just echoing
 avg_gradients = grad if isinstance(grad, dict) else {}
 ip, port = addr
-receiver = {'ip': ip, 'port': port}
+receiver = {"ip": ip, "port": port}
 
 try:
-    tcp_sock.sendall(b"N")  
+    tcp_sock.sendall(b"N")
 except Exception as e:
     print(f"Error sending no eval signal: {e}")
 

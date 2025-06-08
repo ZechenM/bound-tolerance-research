@@ -1,11 +1,12 @@
 import json
-import torch
+import os
 import socket
 import struct
-
 import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import torch
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import mlt
 
@@ -47,7 +48,7 @@ else:
         tcp_sock.sendall(b"N")
     except Exception as e:
         print(f"Error sending no eval signal: {e}")
-        
+
 # Send the gradient data
 num_subgradients = len(tensor_dict)
 try:
@@ -55,8 +56,8 @@ try:
 except Exception as e:
     print(f"Error sending number of subgradients: {e}")
 
-socks = {'tcp': tcp_sock, 'udp': udp_sock}
-server = {'ip': '0.0.0.0', 'port': 6000}
+socks = {"tcp": tcp_sock, "udp": udp_sock}
+server = {"ip": "0.0.0.0", "port": 6000}
 
 for key, tensor in tensor_dict.items():
     tensor_data: bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)
@@ -67,3 +68,5 @@ avg_gradients = mlt.recv_data_MLT(socks)
 # Write to a JSON file
 with open("echoed_gradient.json", "w") as f:
     json.dump(avg_gradients, f, indent=4)
+
+print("Toy example completed. Gradient data sent and echoed back.")
