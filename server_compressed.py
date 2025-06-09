@@ -1,5 +1,3 @@
-#!/home/mininet/bound-tolerance-research/.venv/bin/python3
-
 import argparse
 import pickle
 import random
@@ -9,13 +7,8 @@ from enum import Enum
 
 import torch
 
-from compression import *
-from config import *
-import select
-
-DEBUG = 1
-
-print(f"Compression Method: {compression_method}")
+import config
+import mlt
 
 
 class TrainingPhase(Enum):
@@ -51,21 +44,10 @@ class Server:
         self.zeroed_params = 0
 
         # gradient communication protocal configurations
-        self.protocol = protocol
-        if self.protocol == "MLT":
-            self.send_data = self.send_data_MLT
-            self.recv_data = self.recv_data_MLT
-        elif self.protocol == "TCP":
-            self.send_data = self.send_data_TCP
-            self.recv_data = self.recv_data_TCP
-        else:
-            raise TypeError(f"protocol {self.protocol} is not supported (TCP | MLT)")
-        
-        # MLT configurations
-        self.chunk_size = 1024  # TODO: avoid hard-coding. Make it automatically aligh with the trainer.
+        self.protocol = config.protocol
         self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.UDP_socket.bind(("127.0.0.1", self.port + 1))  # server's UDP listening port
-        self.loss_tolerance = loss_tolerance
+        self.UDP_socket.bind(("0.0.0.0", self.port + 1))  # TODO: each worker should allocate one UDP socket
+        self.loss_tolerance = config.loss_tolerance
         self.UDP_alloc = [self.port + 2 + i for i in range(self.num_workers)]  # pre-allocated UDP port for to-worker connunication
 
         self.write_to_server_port()
@@ -115,6 +97,7 @@ class Server:
         self.conn_addr_map = {}
         self.UDP_connections = []
         for _ in range(self.num_workers):
+            assert self.server_socket is not None, "Server socket is not initialized."
             conn, addr = self.server_socket.accept()
             self.conn_addr_map[conn] = addr
             print(f"Connected to worker at {addr}")
@@ -166,7 +149,6 @@ class Server:
         self.worker_eval_acc.clear()
         self.worker_epochs.clear()
 
-
     def recv_data_TCP(self, TCP_sock):
         # Receive the size of the incoming data
         size_data = self.recv_all(TCP_sock, 4)
@@ -183,107 +165,9 @@ class Server:
         # response with ACK
         # TCP_sock.sendall(b"A")
 
-        compressed_grad = pickle.loads(data)
-        grad = decompress(compressed_grad)
+        grad = pickle.loads(data)
 
-        if "eval_acc" in grad:
-            self.has_eval_acc = True
-            self.worker_eval_acc.append(grad["eval_acc"])
-            self.worker_epochs.append(grad["epoch"])
-            del grad["epoch"]
-            del grad["eval_acc"]
-        
         return grad
-
-
-    def recv_data_MLT(self, TCP_sock):
-        size_data = TCP_sock.recv(4)
-        if not size_data:
-            return None
-        total_chunks = struct.unpack("!I", size_data)[0]
-
-        # self.start_time = time.perf_counter()
-
-        # Initialize storage and bitmap
-        received_chunks = [None] * total_chunks
-        bitmap = bytearray((total_chunks + 7) // 8)  # 1 bit per chunk
-        expected_packet_size = self.chunk_size + 12  # 12-byte header
-        socket_timeout = 2.0  # Adjust based on network conditions
-
-        # Set socket timeout
-        self.UDP_socket.settimeout(socket_timeout)
-        TCP_sock.setblocking(False)  # Make TCP non-blocking
-        while None in received_chunks:
-            try:
-                readable, _, _ = select.select([self.UDP_socket, TCP_sock], [], [], 0.001)
-                if TCP_sock in readable:
-                    signal = TCP_sock.recv(1)
-                    if signal == b"P":
-                        TCP_sock.sendall(b"B")
-                        TCP_sock.sendall(bitmap)
-                        if DEBUG: print(bitmap)
-                    else:
-                        print(f"recv_data_MLT: cannot recognize signal from server:{signal}")
-
-                if self.UDP_socket in readable:
-                    # Receive packet with extra buffer space
-                    packet, _ = self.UDP_socket.recvfrom(expected_packet_size + 100)
-                    if DEBUG: print("received packets")
-                    # Verify minimum packet size
-                    if len(packet) < 12:
-                        print(f"Packet too small: {len(packet)} bytes")
-                        continue
-
-                    # Unpack header (seq, total_chunks, chunk_size)
-                    seq, chunk_count, chunk_size = struct.unpack("!III", packet[:12])
-
-                    # Validate sequence number
-                    if seq >= total_chunks:
-                        print(f"Invalid sequence number: {seq}")
-                        continue
-
-                    # Verify payload size matches header
-                    if len(packet[12:]) != chunk_size:
-                        print(f"Payload size mismatch: expected {chunk_size}, got {len(packet[12:])}")
-                        continue
-
-                    # Store valid chunk and update bitmap
-                    received_chunks[seq] = packet[12:]
-                    byte_index = seq // 8
-                    bit_index = seq % 8
-                    bitmap[byte_index] = bitmap[byte_index] | (1 << bit_index)
-
-                    # early termination: loss within boundary
-                    missing_rate = 1 - (received_chunks.count(None) / total_chunks)
-                    if missing_rate < self.loss_tolerance:
-                        TCP_sock.sendall(b"S")
-                        if DEBUG: print("recv_data_MLT: early termination")
-                        break
-
-            except socket.timeout:
-                print("Timeout waiting for packets")
-                break
-            except Exception as e:
-                print(f"Error receiving packet: {e}")
-                break
-
-        # Reset socket timeout
-        self.UDP_socket.settimeout(None)
-        TCP_sock.setblocking(True)
-        # self.end_time = time.perf_counter()
-        # self.calc_network_latency(is_send=False)
-
-        # if chunk not received, fill with 0
-        for i, chunk in enumerate(received_chunks):
-            if chunk == None:
-                if DEBUG: print("fill with zeros")
-                received_chunks[i] = bytes(self.chunk_size)
-
-        # Reconstruct original data
-        data_bytes = b"".join(received_chunks)
-        if DEBUG: print(data_bytes)
-        return pickle.loads(data_bytes)
-
 
     def send_data_TCP(self, TCP_sock, gradient):
         # Send the size of the data first
@@ -291,65 +175,39 @@ class Server:
         # Sendall the actual data
         TCP_sock.sendall(gradient)
 
-
-    def send_data_MLT(self, TCP_sock, gradient):
-        # divide the gradients, start the timer and send size information to the server throught TCP
-        chunks = self._chunk_gradient(gradient)
-        # self.start_time = time.perf_counter()
-        # TCP_sock.sendall(b"A")  # send over a ready-go signal
-        TCP_sock.sendall(struct.pack("!I", len(chunks)))
-        bitmap = bytearray((len(chunks) + 7) // 8)  # 1 bit per chunk
-        TCP_sock.setblocking(False)  # Make TCP non-blocking
-        while True:
-            readable, _, _ = select.select([TCP_sock], [], [], 0.001)
-            if TCP_sock in readable:
-                signal = TCP_sock.recv(1)
-                if signal == b"S":
-                    break
-                else:
-                    print(f"send_data_MLT: server sending improper signal: {signal}")
-            # Using UDP to send over gradient in the form of chunks. Label each chunk with consecutive ID
-            for i in range(len(chunks)):
-                byte_index = i // 8
-                bit_index = i % 8
-                received = (bitmap[byte_index] >> bit_index) & 1
-                if not received:
-                    chunk = chunks[i]
-                    header = struct.pack("!III", i, len(chunks), len(chunk))
-                    packet = header + chunk
-                    self.UDP_socket.sendto(packet, (self.server_host, self.server_port + 1))
-
-            try:
-                # try to send "probe" signal to the server through TCP network.
-                TCP_sock.sendall(b"P")  # "probe" signal
-                signal = TCP_sock.recv(1)
-                if signal == b"S":  # "stop" signal
-                    break
-                elif signal == b"B":  # "bitmap signal"
-                    bitmap = TCP_sock.recv(len(bitmap))
-                else:
-                    raise ValueError(f"cannot recognize signal from server: {signal}")
-            except Exception as e:
-                print("send_data_MLT: ", e)
-                break
-
-        TCP_sock.setblocking(True)
-        # self.end_time = time.perf_counter()
-        # self.calc_network_latency(is_send=True)
-
-
     def recv_send(self):
         """Receive gradients from all workers and send back averaged gradients"""
         gradients = []
         self.has_eval_acc = False
 
-        for conn, UDP_port in self.connections:
-            grad = self.recv_data(conn)
-            gradients.append(grad)
-            # print(f"Received gradients from worker {self.conn_addr_map[conn]}")
+        for conn, worker_UDP_port in self.connections:
+            if config.protocol == "MLT":
+                # UDP socket needs to be changed to a 1-to-1 correspondence with each worker
+                # for the toy example, we can only have one worker and one server
+                socks = {"tcp": conn, "udp": self.UDP_socket}
+                grad = mlt.recv_data_mlt(socks)
+            elif config.protocol == "TCP":
+                grad = self.recv_data_TCP(conn)
+            else:
+                raise TypeError(f"protocol {self.protocol} is not supported (TCP | MLT)")
 
-        # Received gradients from all workers
-        # print("All gradients received.")
+            if grad is None:
+                print(f"Failed to receive data from worker {self.conn_addr_map[conn]}.")
+                continue
+
+            if "eval_acc" in grad and "epoch" in grad:
+                self.has_eval_acc = True
+                self.worker_eval_acc.append(grad["eval_acc"])
+                self.worker_epochs.append(grad["epoch"])
+                del grad["epoch"]
+                del grad["eval_acc"]
+
+            gradients.append(grad)
+            if config.DEBUG:
+                print(f"Received gradients from worker {self.conn_addr_map[conn]}: {grad.keys()}")
+
+        if config.DEBUG:
+            print(f"Received {len(gradients)} gradients from workers.")
 
         # check accuracy and update training phase accrodingly
         if self.has_eval_acc:
@@ -429,13 +287,37 @@ class Server:
                 self.total_params = 0
                 self.zeroed_params = 0
 
-        # Compress the averaged gradients
-        compressed_avg_gradients = compress(avg_gradients)
-        avg_gradients_data = pickle.dumps(compressed_avg_gradients)
-
         # Send averaged gradients back to all workers
-        for conn, UDP_port in self.connections:
-            self.send_data(conn, avg_gradients_data)
+        for conn, worker_UDP_port in self.connections:
+            tcp_sock = conn
+            ip, port = self.conn_addr_map[conn]
+            if self.protocol == "MLT":
+                socks = {"tcp": tcp_sock, "udp": self.UDP_socket}
+                receiver = (ip, port)
+
+                # Before serializing and send the tensor data, 2 IMPORTANT STEPS
+                # STEP 0: send N signal as the server will NEVER send the E signal
+                try:
+                    tcp_sock.sendall(b"N")
+                except Exception as e:
+                    print(f"Failed to send N signal to worker {self.conn_addr_map[conn]}: {e}")
+                    continue
+                # STEP 1: send how many sub-tensors (subgradients / key-val pairs) will be sent
+                num_subgradients = len(avg_gradients)
+                try:
+                    tcp_sock.sendall(struct.pack("!I", num_subgradients))
+                except Exception as e:
+                    print(f"Failed to send number of subgradients to worker {self.conn_addr_map[conn]}: {e}")
+                    continue
+
+                for key, tensor in avg_gradients.items():
+                    # Serialize each tensor to custom binary format
+                    averaged_tensor_bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)
+                    mlt.send_data_mlt(socks, receiver, averaged_tensor_bytes)
+            elif self.protocol == "TCP":
+                self.send_data_TCP(tcp_sock, pickle.dumps(avg_gradients))
+            else:
+                raise TypeError(f"protocol {self.protocol} is not supported (TCP | MLT)")
             # print(f"Sent averaged gradients to worker {self.conn_addr_map[conn]}")
 
     def run_server(self) -> None:
@@ -456,6 +338,8 @@ class Server:
     def close_server(self) -> None:
         """Close the server"""
         self.is_listening = False
+        assert self.server_socket is not None, "Server socket is not initialized."
+        print("Closing server...")
         self.server_socket.close()
         print("Server closed.")
 
