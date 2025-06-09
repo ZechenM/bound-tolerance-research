@@ -45,9 +45,8 @@ class DistributedTrainer(Trainer):
         if self.protocol == "MLT":
             self.chunk_size = 1024  # TODO: avoid hard-coding. Make it automatically aligh with the server.
             self.send_data = self.send_data_MLT
-            self.recv_data = self.recv_data_TCP  # TODO: MLT recv is not working now, need UDP port. Temp using TCP
+            self.recv_data = self.recv_data_MLT  
             self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.UDP_socket.bind(("0.0.0.0", self.server_port + 2 + self.worker_id))
         elif self.protocol == "TCP":
             self.send_data = self.send_data_TCP
             self.recv_data = self.recv_data_TCP
@@ -80,6 +79,7 @@ class DistributedTrainer(Trainer):
         3. If "stop" signal is not received, and status bitmap is received, re-transmit missing gradient to the server
         """
         # divide the gradients, start the timer and send size information to the server throught TCP
+        if DEBUG: print(gradient)
         chunks = self._chunk_gradient(gradient)
         self.start_time = time.perf_counter()
         # TCP_sock.sendall(b"A")  # send over a ready-go signal
@@ -266,6 +266,10 @@ class DistributedTrainer(Trainer):
             # print(self.server_host, self.server_port)
             s.connect((self.server_host, self.server_port))
             print(f"Worker {self.worker_id} connected to server.")
+            # listen for new UDP port from the TCP channel, and bind the port
+            received_data = s.recv(4)
+            port = struct.unpack("!I", received_data)[0]
+            self.UDP_socket.bind(("0.0.0.0", port))
             self.send_data(s, gradients)
             avg_gradients = self.recv_data(s)
             if avg_gradients is None:

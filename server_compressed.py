@@ -53,17 +53,20 @@ class Server:
         # gradient communication protocal configurations
         self.protocol = protocol
         if self.protocol == "MLT":
-            self.chunk_size = 1024  # TODO: avoid hard-coding. Make it automatically aligh with the trainer.
-            self.send_data = self.send_data_TCP  # TODO: MLT send is not working now, need UDP port. Temp using TCP
+            self.send_data = self.send_data_MLT
             self.recv_data = self.recv_data_MLT
-            self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.UDP_socket.bind(("0.0.0.0", self.port + 1))  # TODO: each worker should allocate one UDP socket
-            self.loss_tolerance = loss_tolerance
         elif self.protocol == "TCP":
             self.send_data = self.send_data_TCP
             self.recv_data = self.recv_data_TCP
         else:
             raise TypeError(f"protocol {self.protocol} is not supported (TCP | MLT)")
+        
+        # MLT configurations
+        self.chunk_size = 1024  # TODO: avoid hard-coding. Make it automatically aligh with the trainer.
+        self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.UDP_socket.bind(("127.0.0.1", self.port + 1))  # server's UDP listening port
+        self.loss_tolerance = loss_tolerance
+        self.UDP_alloc = [self.port + 2 + i for i in range(self.num_workers)]  # pre-allocated UDP port for to-worker connunication
 
         self.write_to_server_port()
         self.start_server()
@@ -99,21 +102,28 @@ class Server:
 
     def close_worker(self):
         """Close all worker connections"""
-        for conn in self.connections:
+        for conn, UDP_port in self.connections:
             conn.close()
+            self.UDP_alloc.append(UDP_port)
         self.connections = []
         self.conn_addr_map = {}
         # print("Closed all worker connections.")
 
     def worker_connection_handler(self) -> None:
         """Wait for all workers to connect"""
-        self.connections = []
+        self.connections = []  # self.connections now keeps tracks of [(TCP_socket, UDP_port), ...]
         self.conn_addr_map = {}
+        self.UDP_connections = []
         for _ in range(self.num_workers):
             conn, addr = self.server_socket.accept()
-            self.connections.append(conn)
             self.conn_addr_map[conn] = addr
             print(f"Connected to worker at {addr}")
+            # allocate worker an UDP port from one of available ports
+            if len(self.UDP_alloc) == 0:
+                raise ValueError("Server does not have any port available for the worker")
+            port = self.UDP_alloc.pop()
+            conn.sendall(struct.pack("!I", port))
+            self.connections.append((conn, port))
 
         print("All workers connected.")
 
@@ -271,7 +281,7 @@ class Server:
 
         # Reconstruct original data
         data_bytes = b"".join(received_chunks)
-
+        if DEBUG: print(data_bytes)
         return pickle.loads(data_bytes)
 
 
@@ -333,7 +343,7 @@ class Server:
         gradients = []
         self.has_eval_acc = False
 
-        for conn in self.connections:
+        for conn, UDP_port in self.connections:
             grad = self.recv_data(conn)
             gradients.append(grad)
             # print(f"Received gradients from worker {self.conn_addr_map[conn]}")
@@ -424,7 +434,7 @@ class Server:
         avg_gradients_data = pickle.dumps(compressed_avg_gradients)
 
         # Send averaged gradients back to all workers
-        for conn in self.connections:
+        for conn, UDP_port in self.connections:
             self.send_data(conn, avg_gradients_data)
             # print(f"Sent averaged gradients to worker {self.conn_addr_map[conn]}")
 

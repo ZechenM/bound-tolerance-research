@@ -25,4 +25,7 @@ DEBUG = 0
 protocol = ["TCP", "MLT"][1]
 
 # config 6: bounded-loss tolerance
-loss_tolerance = 0.03
+loss_tolerance = 0.00
+
+# config 7: chunk size (for MLT)
+chunk_size = 1024
