@@ -81,6 +81,9 @@ def run_server():
 
                 # This function now sends metadata on 'conn' and returns the tensor bytes
                 averaged_tensor_data = mlt.serialize_gradient_to_custom_binary(conn, key, tensor)
+                if averaged_tensor_data is None:
+                    print(f"Failed to serialize tensor data for key '{key}'. Skipping.")
+                    continue
 
                 # This function sends the tensor bytes using the MLT UDP protocol
                 # The server address here is the client's address

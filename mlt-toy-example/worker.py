@@ -81,6 +81,13 @@ def run_worker(server_ip: str, server_port: int, gradient_file: str, send_eval_d
             # This function sends TCP metadata and returns the raw tensor bytes
             tensor_data_bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)
 
+            if tensor_data_bytes is None:
+                raise ValueError(f"Failed to serialize tensor data for key '{key}'.")
+
+            # tcp_sock.close()
+            # tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # tcp_sock.connect((server_ip, server_port))  # Reconnect for MLT send
+
             # This function sends the tensor bytes via the MLT UDP protocol
             success = mlt.send_data_mlt(socks, server_addr_for_mlt, tensor_data_bytes)
             if not success:

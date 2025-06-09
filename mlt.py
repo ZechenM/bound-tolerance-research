@@ -11,30 +11,17 @@ from config import STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE, TORCH_DTYPE_TO_STR, T
 
 
 # --- Helper Functions ---
-def _recv_all(sock: socket.socket, num_bytes: int) -> bytes | None:
+def _recv_all(conn: socket.socket, size: int) -> bytes | None:
     """Helper function to reliably receive exactly num_bytes from a TCP socket."""
-    if num_bytes == 0:
-        return b""
-    data = bytearray()
-    while len(data) < num_bytes:
-        try:
-            # For a blocking socket, recv will wait until data is available
-            packet = sock.recv(num_bytes - len(data))
-            if not packet:
-                # This indicates the connection was closed gracefully by the peer
-                if config.DEBUG:
-                    print(f"_recv_all: Connection closed by peer. Expected {num_bytes}, got {len(data)}.")
-                return None
-            data.extend(packet)
-        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError) as e:
-            if config.DEBUG:
-                print(f"_recv_all: Connection error: {e}")
+    """helper function to receive all data"""
+    data = b""
+    while len(data) < size:
+        packet = conn.recv(size - len(data))
+        if not packet:
             return None
-        except socket.timeout:
-            if config.DEBUG:
-                print(f"_recv_all: Socket timeout. Expected {num_bytes}, got {len(data)}.")
-            return None
-    return bytes(data)
+        data += packet
+
+    return data
 
 
 def _chunk_data(data_bytes: bytes) -> list[bytes]:
@@ -43,7 +30,7 @@ def _chunk_data(data_bytes: bytes) -> list[bytes]:
 
 
 # --- Serialization Function ---
-def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tensor: torch.Tensor) -> bytes:
+def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tensor: torch.Tensor) -> bytes | None:
     """
     Serializes a key (string) and a tensor (torch.Tensor) into a custom binary format.
 
@@ -76,7 +63,7 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
 
     # 2. Dtype string serialization
     dtype_str = TORCH_DTYPE_TO_STR.get(tensor.dtype)
-    if dtype_str is None:
+    if not dtype_str:
         if config.DEBUG:
             print(f"Warning: Unsupported tensor dtype {tensor.dtype} for serialization. Attempting fallback.")
         # Fallback for dtypes not explicitly in TORCH_DTYPE_TO_STR (e.g. bfloat16 if user adds it)
@@ -135,9 +122,39 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
     )
     tcp_sock.sendall(metadata_bytes)
     if config.DEBUG:
-        print(f"TCP Sent: {len(metadata_bytes)} bytes")
+        print(f"Metadata Sent Through TCP: {len(metadata_bytes)} bytes")
 
-    return tensor_data_bytes
+    # ### METADATA ACKNOWLEDGEMENT LOGIC START ###
+    # This block was added to ensure metadata is reliably received before proceeding.
+    max_retries = 3
+    ack_timeout = 5.0  # seconds
+    METADATA_ACK_SIGNAL = b"M"
+
+    for attempt in range(max_retries):
+        try:
+            tcp_sock.sendall(metadata_bytes)
+            if config.DEBUG:
+                print(f"SENDER TCP: Sent {len(metadata_bytes)} bytes of metadata for key '{key}' (Attempt {attempt + 1}/{max_retries}).")
+
+            # Wait for acknowledgment
+            readable, _, _ = select.select([tcp_sock], [], [], ack_timeout)
+            if readable:
+                ack_signal = _recv_all(tcp_sock, 1)
+                if ack_signal == METADATA_ACK_SIGNAL:
+                    if config.DEBUG:
+                        print("SENDER TCP: Received metadata ACK. Proceeding to MLT phase.")
+                    return tensor_data_bytes  # Success
+                else:
+                    print(f"SENDER TCP ERROR: Received invalid ACK signal '{ack_signal}'. Retrying...")
+            else:
+                print("SENDER TCP ERROR: Timeout waiting for metadata ACK. Retrying...")
+        except (ConnectionError, BrokenPipeError) as e:
+            print(f"SENDER TCP ERROR: Connection error during metadata send/ack: {e}. Aborting.")
+            return None
+
+    print(f"SENDER TCP ERROR: Failed to send metadata for key '{key}' after {max_retries} attempts.")
+    return None  # Failure
+    # ### METADATA ACKNOWLEDGEMENT LOGIC END ###
 
 
 def send_data_mlt(socks: dict, server_addr: tuple, gradient_payload_bytes: bytes) -> bool:
@@ -148,7 +165,7 @@ def send_data_mlt(socks: dict, server_addr: tuple, gradient_payload_bytes: bytes
     tcp_sock = socks["tcp"]
     udp_sock = socks["udp"]
     server_host, server_port_tcp = server_addr
-    server_addr_udp = (server_host, server_port_tcp + 1)
+    # server_addr_udp = (server_host, server_port_tcp + 1)
 
     chunks = _chunk_data(gradient_payload_bytes)
     num_chunks = len(chunks)
@@ -169,22 +186,72 @@ def send_data_mlt(socks: dict, server_addr: tuple, gradient_payload_bytes: bytes
         no_progress_rounds = 0
 
         while True:
-            # Send all unacknowledged chunks
+            # --- Phase 1: Opportunistic check for early "Stop" from server ---
+            # This is useful if server wants to terminate this stream early.
+            # Using a very short timeout for a non-blocking check.
+            ready_to_read, _, _ = select.select([tcp_sock], [], [], 0.001)
+            if tcp_sock in ready_to_read:
+                signal = _recv_all(tcp_sock, 1)  # Read just 1 byte non-blockingly (due to select)
+                if not signal:  # Connection closed
+                    print("MLT: TCP connection closed by server (early check).")
+                    return False
+                if signal == b"S":
+                    print("MLT: Received early 'Stop' (S) from server. Transmission for this gradient complete.")
+                    return True
+                else:
+                    # This is unexpected if server only sends S/B in response to P.
+                    # Could log or handle as an error. For now, we might proceed,
+                    # but it could indicate a de-sync.
+                    print(f"MLT: Warning - Unexpected TCP data '{signal}' during early check. Proceeding with caution.")
+
+            # --- Phase 2: Send/Resend UDP chunks based on server_ack_bitmap ---
             chunks_sent_this_round = 0
             for i in range(num_chunks):
                 byte_idx, bit_idx = divmod(i, 8)
+                # Check if the i-th bit in server_ack_bitmap is 0 (server hasn't acked it)
                 if not ((server_ack_bitmap[byte_idx] >> bit_idx) & 1):
                     chunk_payload = chunks[i]
+                    # Header: chunk_id (0-indexed), total_chunks, payload_length_of_this_chunk
                     header = struct.pack("!III", i, num_chunks, len(chunk_payload))
-                    udp_sock.sendto(header + chunk_payload, server_addr_udp)
-                    chunks_sent_this_round += 1
+                    packet_to_send = header + chunk_payload
+                    try:
+                        # TODO: is (self.server_host, self.server_port + 1) correct?
+                        udp_sock.sendto(
+                            packet_to_send,
+                            (server_host, server_port_tcp + 1),
+                        )
+                        chunks_sent_this_round += 1
+                    except Exception as e:
+                        # Log UDP send error but continue; rely on bitmap retransmission
+                        print(f"SENDER MLT: UDP sendto error for chunk {i}: {e}")
             if config.DEBUG:
-                print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks.")
+                print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round.")
 
+            # --- Phase 3: Send "Probe" (P) signal via TCP ---
             # Send 'Probe' (P) and wait for 'Stop' (S) or 'Bitmap' (B)
             if config.DEBUG:
                 print("SENDER MLT: Sending 'Probe' (P) via TCP.")
-            tcp_sock.sendall(b"P")
+            try:
+                tcp_sock.sendall(b"P")
+            except Exception as e:
+                print(f"MLT: Failed to send 'Probe' (P) signal: {e}")
+                return False
+
+            #  --- Phase 4: Receive server's response (S or B + bitmap) ---
+            if config.DEBUG:
+                print("SENDER MLT: Waiting for server response after 'Probe' (P).")
+
+            # Use select with a reasonable timeout for the server to respond
+            probe_response_timeout = 3.0  # seconds
+            ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
+
+            if not ready_to_read:
+                print(f"SENDER MLT: Timeout ({probe_response_timeout}s) waiting for server response to 'Probe'.")
+                no_progress_rounds += 1
+                if no_progress_rounds >= max_retries_no_progress:
+                    print("SENDER MLT: Max retries with no progress reached. Aborting.")
+                    return False
+                continue  # Retry by sending probe again after resending unacked chunks
 
             signal = _recv_all(tcp_sock, 1)
             if not signal:
@@ -192,12 +259,10 @@ def send_data_mlt(socks: dict, server_addr: tuple, gradient_payload_bytes: bytes
                 return False
 
             if signal == b"S":
-                if config.DEBUG:
-                    print("SENDER MLT: Received 'Stop' (S). Transfer complete.")
+                print("SENDER MLT: Received 'Stop' (S). Transfer complete.")
                 return True
             elif signal == b"B":
-                if config.DEBUG:
-                    print("SENDER MLT: Received 'Bitmap' (B) signal, receiving bitmap.")
+                print("SENDER MLT: Received 'Bitmap' (B) signal, receiving bitmap.")
 
                 bitmap_len_to_recv = len(server_ack_bitmap)
                 new_bitmap_data = _recv_all(tcp_sock, bitmap_len_to_recv)
@@ -208,8 +273,7 @@ def send_data_mlt(socks: dict, server_addr: tuple, gradient_payload_bytes: bytes
 
                 if bytearray(new_bitmap_data) == server_ack_bitmap and chunks_sent_this_round > 0:
                     no_progress_rounds += 1
-                    if config.DEBUG:
-                        print(f"SENDER MLT: No change in bitmap. Progress stalled ({no_progress_rounds}/{max_retries_no_progress}).")
+                    print(f"SENDER MLT: No change in bitmap. Progress stalled ({no_progress_rounds}/{max_retries_no_progress}).")
                 else:
                     no_progress_rounds = 0
 
@@ -239,47 +303,45 @@ def recv_data_mlt(socks: dict) -> dict | None:
     tcp_sock = socks["tcp"]
     udp_sock = socks["udp"]
 
-    # ### DRAMATIC CHANGE START ###
     # This entire block was added to create a clear protocol start.
     # The receiver first expects an 'E' (Eval) or 'N' (No Eval) signal,
     # then the number of gradients. This makes the start of the communication
     # much more robust and less ambiguous than just waiting for data.
 
-    # First, receive the eval signal and optional data
+    # STEP 0: determine if eval_acc and epoch will be sent from the worker
     eval_signal = _recv_all(tcp_sock, 1)
-    if eval_signal is None:
+    if not eval_signal:
         if config.DEBUG:
             print("RECEIVER: Did not receive initial eval signal. Connection may be closed.")
         return None
 
+    # Case 1: signal is 'E' (eval_acc and epoch will be sent)
     if eval_signal == b"E":
         eval_acc_bytes = _recv_all(tcp_sock, 4)
         epoch_bytes = _recv_all(tcp_sock, 4)
-        if eval_acc_bytes is None or epoch_bytes is None:
+        if not eval_acc_bytes or not epoch_bytes:
             print("RECEIVER ERROR: Failed to receive eval data after 'E' signal.")
             return None
         eval_acc = struct.unpack("!f", eval_acc_bytes)[0]
         curr_epoch = struct.unpack("!f", epoch_bytes)[0]
         final_gradients_dict["eval_acc"] = eval_acc
         final_gradients_dict["epoch"] = curr_epoch
-        if config.DEBUG:
-            print(f"RECEIVER: Received 'E' signal with eval_acc={eval_acc}, epoch={curr_epoch}")
+        print(f"RECEIVER: Received 'E' signal with eval_acc={eval_acc}, epoch={curr_epoch}")
+    # Case 2: signal is 'N' (no eval data will be sent)
     elif eval_signal == b"N":
-        if config.DEBUG:
-            print("RECEIVER: Received 'N' signal (no eval data).")
+        print("RECEIVER: Received 'N' signal (no eval data).")
     else:
         print(f"RECEIVER ERROR: Unrecognized initial signal '{eval_signal}'.")
         return None
 
-    # Next, receive the number of sub-gradients (layers)
+    # for each worker, all the important metadata will always be received first through TCP
     num_subgradients_bytes = _recv_all(tcp_sock, 4)
-    if num_subgradients_bytes is None:
+    if not num_subgradients_bytes:
         print("RECEIVER ERROR: Failed to receive the number of sub-gradients.")
         return final_gradients_dict if final_gradients_dict else None
     num_subgradients = struct.unpack("!I", num_subgradients_bytes)[0]
     if config.DEBUG:
         print(f"RECEIVER: Expecting to receive {num_subgradients} gradients.")
-    # ### DRAMATIC CHANGE END ###
 
     # Loop to receive each gradient
     for grad_idx in range(num_subgradients):
@@ -287,63 +349,112 @@ def recv_data_mlt(socks: dict) -> dict | None:
             print(f"\n--- RECEIVER: Starting reception for gradient {grad_idx + 1}/{num_subgradients} ---")
 
         # --- Receive Metadata for one gradient ---
-        # This part is structurally similar to your original code, but uses the robust _recv_all
-        packed_key_len_bytes = _recv_all(tcp_sock, 4)
-        if packed_key_len_bytes is None:
-            break
-        key_len = struct.unpack("!I", packed_key_len_bytes)[0]
+        # 1. key deserialization
+        # 1.1. receive the length of packed value and UNPACK it
+        packed_key_len = _recv_all(tcp_sock, 4)
+        if not packed_key_len:
+            return None
+        key_len = struct.unpack("!I", packed_key_len)[0]
+
+        # 1.2. receive the actual value and DECODE it
         key_bytes = _recv_all(tcp_sock, key_len)
+        if not key_bytes:
+            return None
+        key_str = key_bytes.decode("utf-8")
+        # Initialize with None
+        # to be filled out during UDP transmission
+        final_gradients_dict[key_str] = None
 
-        packed_dtype_str_len_bytes = _recv_all(tcp_sock, 2)
-        assert packed_dtype_str_len_bytes is not None, "Failed to receive dtype string length"
-        dtype_str_len = struct.unpack("!H", packed_dtype_str_len_bytes)[0]
+        # --------------------------------------------------------------------------------------------------------------------------
+        if config.DEBUG:
+            print(f"RECEIVER TCP: Received key length {key_len} bytes")
+        # ----------------------------------------------------------------------------------------------------------------------------
+
+        # 2. dtype string deserialization
+        # 2.1. ...
+        packed_dtype_str_len = _recv_all(tcp_sock, 2)
+        if not packed_dtype_str_len:
+            return None
+        dtype_str_len = struct.unpack("!H", packed_dtype_str_len)[0]
+
+        # 2.2. ...
         dtype_str_bytes = _recv_all(tcp_sock, dtype_str_len)
+        if not dtype_str_bytes:
+            return None
+        dtype_str = dtype_str_bytes.decode("utf-8")
 
-        packed_num_dimensions_bytes = _recv_all(tcp_sock, 1)
-        assert packed_num_dimensions_bytes is not None, "Failed to receive number of dimensions"
-        num_dimensions = struct.unpack("!B", packed_num_dimensions_bytes)[0]
+        torch_dtype = STR_TO_TORCH_DTYPE.get(dtype_str, None)
+        numpy_dtype = STR_TO_NUMPY_DTYPE.get(dtype_str, None)
+        if not torch_dtype or not numpy_dtype:
+            raise ValueError(f"Unsupported dtype: {dtype_str}")
 
+        # --------------------------------------------------------------------------------------------------------------------------
+        if config.DEBUG:
+            print(f"RECEIVER TCP: Received dtype {dtype_str} (length {dtype_str_len})")
+        # ----------------------------------------------------------------------------------------------------------------------------
+
+        # 3. shape deserialization
+        # 3.1
+        packed_num_dimensions = _recv_all(tcp_sock, 1)
+        if not packed_num_dimensions:
+            return None
+        num_dimensions = struct.unpack("!B", packed_num_dimensions)[0]
+        # 3.2
         shape_list = []
-        for _ in range(num_dimensions):
-            packed_dim_size = _recv_all(tcp_sock, 4)
-            if packed_dim_size is None:
+        shape_read_success = True
+        for i in range(num_dimensions):
+            packed_dim_size_bytes = _recv_all(tcp_sock, 4)
+            if not packed_dim_size_bytes:
+                shape_read_success = False
                 break
-            shape_list.append(struct.unpack("!I", packed_dim_size)[0])
-        if len(shape_list) != num_dimensions:
-            break
+            dim_size = struct.unpack("!I", packed_dim_size_bytes)[0]
+            shape_list.append(dim_size)
+        if not shape_read_success:
+            raise ValueError("Failed to read shape dimensions")
         shape_tuple = tuple(shape_list)
 
-        packed_tensor_data_len_bytes = _recv_all(tcp_sock, 8)
-        if packed_tensor_data_len_bytes is None:
-            break
-        tensor_data_len_expected = struct.unpack("!Q", packed_tensor_data_len_bytes)[0]
+        # --------------------------------------------------------------------------------------------------------------------------
+        if config.DEBUG:
+            print(f"RECEIVER TCP: Received shape {shape_tuple} (num_dimensions={num_dimensions})")
+        # ----------------------------------------------------------------------------------------------------------------------------
 
-        assert key_bytes is not None, "Failed to receive key bytes"
-        assert dtype_str_bytes is not None, "Failed to receive dtype string bytes"
-        key_str, dtype_str = key_bytes.decode("utf-8"), dtype_str_bytes.decode("utf-8")
-        torch_dtype, numpy_dtype = (
-            STR_TO_TORCH_DTYPE.get(dtype_str),
-            STR_TO_NUMPY_DTYPE.get(dtype_str),
-        )
-
-        if not torch_dtype or not numpy_dtype:
-            print(f"RECEIVER ERROR: Unsupported dtype '{dtype_str}' for key '{key_str}'. Cannot proceed.")
+        # 4. tensor data length deserialization
+        packed_tensor_data_len = _recv_all(tcp_sock, 8)
+        if not packed_tensor_data_len:
             return None
+        tensor_data_len_expected = struct.unpack("!Q", packed_tensor_data_len)[0]
+
+        if config.DEBUG:
+            print(f"RECEIVER TCP: Expected tensor data length {tensor_data_len_expected} bytes")
 
         if config.DEBUG:
             print(f"RECEIVER TCP: Metadata OK for key='{key_str}', shape={shape_tuple}, expected_data_len={tensor_data_len_expected}")
 
+        # ### METADATA ACKNOWLEDGEMENT LOGIC START ###
+        # This block was added to send the acknowledgment back to the sender.
+        METADATA_ACK_SIGNAL = b"M"
+        try:
+            tcp_sock.sendall(METADATA_ACK_SIGNAL)
+            if config.DEBUG:
+                print("RECEIVER TCP: Sent metadata ACK signal to sender.")
+        except (ConnectionError, BrokenPipeError):
+            print("RECEIVER TCP ERROR: Failed to send metadata ACK. Sender may not proceed.")
+            break  # Exit the loop, can't continue
+        # ### METADATA ACKNOWLEDGEMENT LOGIC END ###
+
+        # 5. Prepare to receive the tensor data
+        #  UDP WILL START SOON
         # --- Receive Tensor Chunks via MLT ---
         num_chunks_bytes = _recv_all(tcp_sock, 4)
-        if num_chunks_bytes is None:
-            break
+        if not num_chunks_bytes:
+            return None
         total_chunks = struct.unpack("!I", num_chunks_bytes)[0]
         if config.DEBUG:
             print(f"RECEIVER MLT: Expecting {total_chunks} chunks for '{key_str}'.")
 
         received_chunks = [None] * total_chunks
         bitmap = bytearray((total_chunks + 7) // 8)
-
+        expected_packet_size = config.CHUNK_SIZE + 12  # 12-byte header
         original_udp_timeout = udp_sock.gettimeout()
         udp_sock.settimeout(2.0)
 
@@ -354,10 +465,7 @@ def recv_data_mlt(socks: dict) -> dict | None:
         has_stopped = False
         while None in received_chunks:
             try:
-                readable, _, _ = select.select([udp_sock, tcp_sock], [], [], 2.0)
-                if not readable:
-                    print(f"RECEIVER MLT: Timeout waiting for UDP chunks or TCP probe for '{key_str}'.")
-                    break
+                readable, _, _ = select.select([udp_sock, tcp_sock], [], [], 0.001)
 
                 if tcp_sock in readable:
                     signal = _recv_all(tcp_sock, 1)
@@ -371,8 +479,11 @@ def recv_data_mlt(socks: dict) -> dict | None:
                         break
 
                 if udp_sock in readable:
-                    packet, _ = udp_sock.recvfrom(config.CHUNK_SIZE + 12)
+                    packet, _ = udp_sock.recvfrom(expected_packet_size + 100)
+                    if config.DEBUG:
+                        print(f"RECEIVER MLT: Received UDP packet of size {len(packet)} bytes.")
                     if len(packet) < 12:
+                        print(f"RECEIVER MLT: Packet too small: {len(packet)} bytes. Ignoring.")
                         continue
                     seq, _, chunk_len_in_header = struct.unpack("!III", packet[:12])
                     if seq < total_chunks and received_chunks[seq] is None and len(packet[12:]) == chunk_len_in_header:
@@ -388,6 +499,10 @@ def recv_data_mlt(socks: dict) -> dict | None:
                     tcp_sock.sendall(b"S")
                     break
             except (socket.timeout, ConnectionError):
+                break
+            except Exception as e:
+                print(f"RECEIVER MLT ERROR: An unexpected error occurred: {e}")
+                traceback.print_exc()
                 break
 
         # if you got out of the loop, you should set the STOP signal
