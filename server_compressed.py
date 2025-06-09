@@ -94,6 +94,7 @@ class Server:
         self.connections = []
         self.conn_addr_map = {}
         for _ in range(self.num_workers):
+            assert self.server_socket is not None, "Server socket is not initialized."
             conn, addr = self.server_socket.accept()
             self.connections.append(conn)
             self.conn_addr_map[conn] = addr
@@ -176,7 +177,7 @@ class Server:
                 # UDP socket needs to be changed to a 1-to-1 correspondence with each worker
                 # for the toy example, we can only have one worker and one server
                 socks = {"tcp": conn, "udp": self.UDP_socket}
-                grad = mlt.recv_data_MLT(socks)
+                grad = mlt.recv_data_mlt(socks)
             elif config.protocol == "TCP":
                 grad = self.recv_data_TCP(conn)
             else:
@@ -284,7 +285,7 @@ class Server:
             ip, port = self.conn_addr_map[conn]
             if self.protocol == "MLT":
                 socks = {"tcp": tcp_sock, "udp": self.UDP_socket}
-                receiver = {"ip": ip, "port": port}
+                receiver = (ip, port)
 
                 # Before serializing and send the tensor data, 2 IMPORTANT STEPS
                 # STEP 0: send N signal as the server will NEVER send the E signal
@@ -304,7 +305,7 @@ class Server:
                 for key, tensor in avg_gradients.items():
                     # Serialize each tensor to custom binary format
                     averaged_tensor_bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)
-                    mlt.send_data_MLT(socks, receiver, averaged_tensor_bytes)
+                    mlt.send_data_mlt(socks, receiver, averaged_tensor_bytes)
             elif self.protocol == "TCP":
                 self.send_data_TCP(tcp_sock, pickle.dumps(avg_gradients))
             else:
@@ -329,6 +330,8 @@ class Server:
     def close_server(self) -> None:
         """Close the server"""
         self.is_listening = False
+        assert self.server_socket is not None, "Server socket is not initialized."
+        print("Closing server...")
         self.server_socket.close()
         print("Server closed.")
 

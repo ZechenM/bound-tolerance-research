@@ -27,7 +27,7 @@ protocol = ["TCP", "MLT"][1]
 
 # config 6: bounded-loss tolerance
 loss_tolerance = 0
-chunk_size = 1024
+CHUNK_SIZE = 1024
 
 # config 7: Mappings for Dtypes
 # These mappings help convert between torch.dtype, its string representation,

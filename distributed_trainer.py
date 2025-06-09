@@ -109,19 +109,19 @@ class DistributedTrainer(Trainer):
                     print(f"Error sending number of subgradients: {e}")
 
                 socks = {"tcp": s, "udp": self.UDP_socket}
-                server = {"ip": self.server_host, "port": self.server_port}
+                server = (self.server_host, self.server_port)
 
                 # Send everything inside gradient key-val pair by key-val pair
                 for key, tensor in gradients.items():
                     tensor_data: bytes = mlt.serialize_gradient_to_custom_binary(s, key, tensor)
-                    mlt.send_data_MLT(socks, server, tensor_data)
+                    mlt.send_data_mlt(socks, server, tensor_data)
             elif self.protocol == "TCP":
                 self.send_data_TCP(s, gradients)
             else:
                 raise ValueError(f"Unsupported protocol: {self.protocol}")
 
             # Receive averaged gradients from the server
-            avg_gradients = mlt.recv_data_MLT(socks)
+            avg_gradients = mlt.recv_data_mlt(socks)
             if avg_gradients is None:
                 return False, None
         return True, avg_gradients
