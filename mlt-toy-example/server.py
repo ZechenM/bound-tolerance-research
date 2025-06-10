@@ -29,22 +29,23 @@ def run_server():
     # you would wrap this accept() call in another loop.
     try:
         # IMPORTANT: accept() creates a NEW socket for the connection
-        conn, addr = listening_tcp_sock.accept()
-        print(f"Connection established with {addr}")
+        # tcp_addr == worker connected tcp_addr
+        conn, tcp_addr = listening_tcp_sock.accept()
+        print(f"Connection established with {tcp_addr}")
 
         with conn:  # Use 'with' statement to ensure the connection socket is closed
             socks = {"tcp": conn, "udp": udp_sock}
+            addrs = {}
 
             # --- RECEIVE PHASE ---
-            # Assume recv_data_mlt is modified to not loop forever, but to expect a
-            # specific number of gradients or an "end" signal from the client.
-            # For this example, let's assume it receives one full gradient dictionary.
-            # NOTE: Your original recv_data_MLT was fine, this is just a conceptual note.
-            received_gradients = mlt.recv_data_mlt(socks)
+            received_tuple = mlt.recv_data_mlt(socks)
 
-            if received_gradients is None:
-                print(f"Failed to receive gradient data from worker {addr}.")
-                return  # Exit if receive failed
+            if received_tuple is None:
+                raise ValueError(f"Failed to receive gradient data from worker {tcp_addr}.")
+
+            # udp addr is a tuple of udp_host, udp_port
+            received_gradients, udp_addr = received_tuple
+            addrs["udp"] = udp_addr
 
             # In a real scenario, you'd wait for gradients from all workers here.
             # For this toy example, we just "average" by echoing.
@@ -56,12 +57,13 @@ def run_server():
             # Use the CONNECTION socket `conn`, not the listening socket `listening_tcp_sock`
             # And no need for a separate `receiver` dict if sending to the same client.
 
-            print("\n--- Echoing gradients back to worker ---")
+            print("\n--- Send (Echoing) gradients back to worker ---")
 
             # 1. Send 'N' signal (No more evaluation results to send)
             # Use the connection socket 'conn'
             try:
                 conn.sendall(b"N")
+                print("SERVER: Sent 'no eval' singal 'N'.")
             except Exception as e:
                 print(f"Error sending 'N' signal: {e}")
 
@@ -70,6 +72,7 @@ def run_server():
             num_subgradients = len(avg_gradients)
             try:
                 conn.sendall(struct.pack("!I", num_subgradients))
+                print(f"SERVER: Notified server to expect {num_subgradients} gradients.")
             except Exception as e:
                 print(f"Error sending number of subgradients: {e}")
 
@@ -87,11 +90,14 @@ def run_server():
 
                 # This function sends the tensor bytes using the MLT UDP protocol
                 # The server address here is the client's address
-                ip, port = addr
-                receiver = (ip, port)
-                mlt.send_data_mlt(socks, receiver, averaged_tensor_data)
+                addrs["tcp"] = tcp_addr
+                success = mlt.send_data_mlt(socks, addrs, averaged_tensor_data)
+                if not success:
+                    raise ValueError(f"SERVER ERROR: Failed to send tensor data for key '{key}' using MLT. Aborting.")
+                else:
+                    print(f"\n--- SERVER successfully sent all the tensor data for key '{key}' ---")
 
-        print(f"\nFinished echo transaction with {addr}. Closing connection.")
+        print(f"\nFinished echo transaction with TCP:{tcp_addr} and UDP:{udp_addr}. Closing connection.")
 
     except Exception as e:
         print(f"An error occurred in the main server loop: {e}")

@@ -28,6 +28,7 @@ def _chunk_data(data_bytes: bytes) -> list[bytes]:
     """Breaks a byte string into fixed-size chunks."""
     return [data_bytes[i : i + config.CHUNK_SIZE] for i in range(0, len(data_bytes), config.CHUNK_SIZE)]
 
+
 def _check_if_told_to_stop(sock: socket.socket, timeout: float = 0.001) -> bool:
     """
     Polls a socket to check if it is ready for reading.
@@ -39,14 +40,14 @@ def _check_if_told_to_stop(sock: socket.socket, timeout: float = 0.001) -> bool:
         if not signal:  # Connection closed
             raise ConnectionError("SENDER MLT: Connection closed by receiver during early check.")
         if signal == b"S":
-            print("MLT: Received early 'Stop' (S) from server. Transmission for this gradient complete.")
+            print("MLT HELPER: Received early 'Stop' (S) from server. Transmission for this gradient complete.")
             return True
         else:
             # This is unexpected if server only sends S/B in response to P.
             # Could log or handle as an error. For now, we might proceed,
             # but it could indicate a de-sync.
             print(f"MLT: Warning - Unexpected TCP data '{signal}' during early check. Proceeding with caution.")
-    
+
     return False
 
 
@@ -144,54 +145,22 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
     try:
         tcp_sock.sendall(metadata_bytes)
     except Exception as e:
-        raise ConnectionError("tcp sock connection error: {e}")
+        raise ConnectionError(f"tcp sock connection error: {e}")
     if config.DEBUG:
         print(f"Metadata Sent Through TCP: {len(metadata_bytes)} bytes")
 
-    # # ### METADATA ACKNOWLEDGEMENT LOGIC START ###
-    # # This block was added to ensure metadata is reliably received before proceeding.
-    # max_retries = 3
-    # ack_timeout = 5.0  # seconds
-    # METADATA_ACK_SIGNAL = b"M"
-
-    # for attempt in range(max_retries):
-    #     try:
-    #         tcp_sock.sendall(metadata_bytes)
-    #         if config.DEBUG:
-    #             print(f"SENDER TCP: Sent {len(metadata_bytes)} bytes of metadata for key '{key}' (Attempt {attempt + 1}/{max_retries}).")
-
-    #         # Wait for acknowledgment
-    #         readable, _, _ = select.select([tcp_sock], [], [], ack_timeout)
-    #         if readable:
-    #             ack_signal = _recv_all(tcp_sock, 1)
-    #             if ack_signal == METADATA_ACK_SIGNAL:
-    #                 if config.DEBUG:
-    #                     print("SENDER TCP: Received metadata ACK. Proceeding to MLT phase.")
-    #                 return tensor_data_bytes  # Success
-    #             else:
-    #                 print(f"SENDER TCP ERROR: Received invalid ACK signal '{ack_signal}'. Retrying...")
-    #         else:
-    #             print("SENDER TCP ERROR: Timeout waiting for metadata ACK. Retrying...")
-    #     except (ConnectionError, BrokenPipeError) as e:
-    #         print(f"SENDER TCP ERROR: Connection error during metadata send/ack: {e}. Aborting.")
-    #         return None
-
-    # print(f"SENDER TCP ERROR: Failed to send metadata for key '{key}' after {max_retries} attempts.")
-    # return None  # Failure
-    # # ### METADATA ACKNOWLEDGEMENT LOGIC END ###
-    
     return tensor_data_bytes
 
 
-def send_data_mlt(socks: dict, server_addr: tuple, gradient_payload_bytes: bytes) -> bool:
+def send_data_mlt(socks: dict, addrs: dict, gradient_payload_bytes: bytes) -> bool:
     """
     Sends gradient data bytes using the MLT protocol (UDP with TCP-based ACK/retransmission).
     Returns True on success, False on failure.
     """
     tcp_sock = socks["tcp"]
     udp_sock = socks["udp"]
-    server_host, server_port_tcp = server_addr
-    # server_addr_udp = (server_host, server_port_tcp + 1)
+    tcp_host, tcp_port = addrs["tcp"]
+    udp_host, udp_port = addrs["udp"]
 
     chunks = _chunk_data(gradient_payload_bytes)
     num_chunks = len(chunks)
@@ -216,11 +185,13 @@ def send_data_mlt(socks: dict, server_addr: tuple, gradient_payload_bytes: bytes
             # This is useful if server wants to terminate this stream early.
             # Using a very short timeout for a non-blocking check.
 
-            # TODO: move it into the for loop b/c STOP signal can happen at any time 
+            # TODO: move it into the for loop b/c STOP signal can happen at any time
             # do it a couple of more times: before for loop, at the beginning of the for loop, and at the end of the for loop
             # and after for loop
             if _check_if_told_to_stop(tcp_sock):
-                print("SENDER MLT: 'Stop' signal received. Aborting transmission.")
+                if config.DEBUG:
+                    print("SENDER MLT: 'Stop' signal received at the beginning of while loop. Transmission COMPLETED.")
+                    print("SENDER MLT: Have not sent any UDP chunks this round")
                 return True
 
             # --- Phase 2: Send/Resend UDP chunks based on server_ack_bitmap ---
@@ -228,7 +199,9 @@ def send_data_mlt(socks: dict, server_addr: tuple, gradient_payload_bytes: bytes
             for i in range(num_chunks):
                 # check stop signal has arrived or not
                 if _check_if_told_to_stop(tcp_sock):
-                    print("SENDER MLT: 'Stop' signal received. Transmission COMPLETED.")
+                    if config.DEBUG:
+                        print("SENDER MLT: 'Stop' signal received at the beginning of for loop. Transmission COMPLETED.")
+                        print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round")
                     return True
 
                 byte_idx, bit_idx = divmod(i, 8)
@@ -239,24 +212,21 @@ def send_data_mlt(socks: dict, server_addr: tuple, gradient_payload_bytes: bytes
                     header = struct.pack("!III", i, num_chunks, len(chunk_payload))
                     packet_to_send = header + chunk_payload
                     try:
-                        # TODO: is (self.server_host, self.server_port + 1) correct?
                         udp_sock.sendto(
                             packet_to_send,
-                            (server_host, server_port_tcp + 1),
+                            (udp_host, udp_port),
                         )
                         chunks_sent_this_round += 1
+
                     except Exception as e:
                         # Log UDP send error but continue; rely on bitmap retransmission
                         print(f"SENDER MLT: UDP sendto error for chunk {i}: {e}")
-                
+
                 if _check_if_told_to_stop(tcp_sock):
-                    print(
-                        "SENDER MLT: 'Stop' signal received during chunk sending. Transmission COMPLETED."
-                    )
+                    if config.DEBUG:
+                        print("SENDER MLT: 'Stop' signal received at the end of for loop. Transmission COMPLETED")
+                        print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round")
                     return True
-                
-            if config.DEBUG:
-                print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round.")
 
             # --- Phase 3: Send "Probe" (P) signal via TCP ---
             # Send 'Probe' (P) and wait for 'Stop' (S) or 'Bitmap' (B)
@@ -322,7 +292,7 @@ def send_data_mlt(socks: dict, server_addr: tuple, gradient_payload_bytes: bytes
         return False
 
 
-def recv_data_mlt(socks: dict) -> dict | None:
+def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
     """
     Receives gradient data using the MLT protocol.
     Returns a dictionary of reconstructed gradients.
@@ -366,7 +336,7 @@ def recv_data_mlt(socks: dict) -> dict | None:
     num_subgradients_bytes = _recv_all(tcp_sock, 4)
     if not num_subgradients_bytes:
         print("RECEIVER ERROR: Failed to receive the number of sub-gradients.")
-        return final_gradients_dict if final_gradients_dict else None
+        return None
     num_subgradients = struct.unpack("!I", num_subgradients_bytes)[0]
     if config.DEBUG:
         print(f"RECEIVER: Expecting to receive {num_subgradients} gradients.")
@@ -458,18 +428,6 @@ def recv_data_mlt(socks: dict) -> dict | None:
         if config.DEBUG:
             print(f"RECEIVER TCP: Metadata OK for key='{key_str}', shape={shape_tuple}, expected_data_len={tensor_data_len_expected}")
 
-        # # ### METADATA ACKNOWLEDGEMENT LOGIC START ###
-        # # This block was added to send the acknowledgment back to the sender.
-        # METADATA_ACK_SIGNAL = b"M"
-        # try:
-        #     tcp_sock.sendall(METADATA_ACK_SIGNAL)
-        #     if config.DEBUG:
-        #         print("RECEIVER TCP: Sent metadata ACK signal to sender.")
-        # except (ConnectionError, BrokenPipeError):
-        #     print("RECEIVER TCP ERROR: Failed to send metadata ACK. Sender may not proceed.")
-        #     break  # Exit the loop, can't continue
-        # # ### METADATA ACKNOWLEDGEMENT LOGIC END ###
-
         # 5. Prepare to receive the tensor data
         #  UDP WILL START SOON
         # --- Receive Tensor Chunks via MLT ---
@@ -478,7 +436,7 @@ def recv_data_mlt(socks: dict) -> dict | None:
             return None
         total_chunks = struct.unpack("!I", num_chunks_bytes)[0]
         if config.DEBUG:
-            print(f"RECEIVER MLT: Expecting {total_chunks} chunks for '{key_str}'.")
+            print(f"RECEIVER MLT(TCP): Expecting {total_chunks} chunks for '{key_str}'.")
 
         received_chunks = [None] * total_chunks
         bitmap = bytearray((total_chunks + 7) // 8)
@@ -496,18 +454,18 @@ def recv_data_mlt(socks: dict) -> dict | None:
                 readable, _, _ = select.select([udp_sock, tcp_sock], [], [], 0.001)
 
                 if udp_sock in readable:
-                    packet, _ = udp_sock.recvfrom(expected_packet_size + 100)
+                    packet, udp_addr = udp_sock.recvfrom(expected_packet_size + 100)
                     if config.DEBUG:
-                        print(f"RECEIVER MLT: Received UDP packet of size {len(packet)} bytes.")
+                        print(f"RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes.")
                     if len(packet) < 12:
-                        print(f"RECEIVER MLT: Packet too small: {len(packet)} bytes. Ignoring.")
+                        print(f"RECEIVER MLT(UDP): Packet too small: {len(packet)} bytes. Ignoring.")
                         continue
                     seq, _, chunk_len_in_header = struct.unpack("!III", packet[:12])
                     if seq < total_chunks and received_chunks[seq] is None and len(packet[12:]) == chunk_len_in_header:
                         received_chunks[seq] = packet[12:]
                         byte_idx, bit_idx = divmod(seq, 8)
                         bitmap[byte_idx] |= 1 << bit_idx
-                        
+
                 if tcp_sock in readable:
                     signal = _recv_all(tcp_sock, 1)
                     # STOP signal can be sent after receiving PROBE (P)
@@ -515,10 +473,8 @@ def recv_data_mlt(socks: dict) -> dict | None:
                     # after receiving PROBE (P)
                     if signal == b"P":
                         if config.DEBUG:
-                            print(
-                                "RECEIVER MLT: Received 'Probe' (P), sending 'Stop' (S) and 'Bitmap' (B)."
-                            )
-                         # Early termination logic OR all chunks are received
+                            print("RECEIVER MLT: Received 'Probe' (P), sending 'Stop' (S) OR 'Bitmap' (B).")
+                        # Early termination logic OR all chunks are received
                         if total_chunks > 0 and (received_chunks.count(None) / total_chunks) <= config.loss_tolerance:
                             if config.DEBUG:
                                 print(f"RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
@@ -526,6 +482,8 @@ def recv_data_mlt(socks: dict) -> dict | None:
                             tcp_sock.sendall(b"S")
                             break
                         else:
+                            if config.DEBUG:
+                                print(f"RECEIVER MLT: Sending 'Bitmap' (B) {bitmap}")
                             tcp_sock.sendall(b"B")
                             tcp_sock.sendall(bitmap)
                     elif not signal:
@@ -540,7 +498,8 @@ def recv_data_mlt(socks: dict) -> dict | None:
         # if you got out of the loop, you should set the STOP signal
         if not has_stopped:
             if config.DEBUG:
-                print("RECEIVER MLT: Got out of chunk send/recv loop but had not sent STOP (S) signal\n", f"Sending it right now for '{key_str}'")
+                print("RECEIVER MLT: Got out of chunk send/recv loop but had not sent STOP (S) signal")
+                print(f"    Sending it right now for '{key_str}'")
             tcp_sock.sendall(b"S")
 
         udp_sock.settimeout(original_udp_timeout)
@@ -560,12 +519,12 @@ def recv_data_mlt(socks: dict) -> dict | None:
             if chunk:
                 # If we have the chunk, ensure it's not longer than expected
                 if expected_chunk_size != config.CHUNK_SIZE:
-                    print(f"Chunk size {expected_chunk_size} is less than normal {config.CHUNK_SIZE}")
+                    print(f"RECEIVER MLT: Chunk size {expected_chunk_size} is less than normal {config.CHUNK_SIZE}")
                 final_data_list.append(chunk[:expected_chunk_size])
             else:
                 # If chunk is missing, append zeros of the *correct* size
                 if config.DEBUG:
-                    print(f"RECEIVER: Zero-filling missing chunk #{i} with {expected_chunk_size} bytes.")
+                    print(f"RECEIVER MLT: Zero-filling missing chunk #{i} with {expected_chunk_size} bytes.")
                 final_data_list.append(b"\x00" * expected_chunk_size)
 
         final_tensor_data_as_bytes = b"".join(final_data_list)
@@ -591,4 +550,4 @@ def recv_data_mlt(socks: dict) -> dict | None:
             print(f"RECONSTRUCTION ERROR for '{key_str}': {e}. Storing zeros.")
             final_gradients_dict[key_str] = torch.zeros(shape_tuple, dtype=torch_dtype)
 
-    return final_gradients_dict
+    return final_gradients_dict, udp_addr

@@ -72,9 +72,9 @@ def run_worker(server_ip: str, server_port: int, gradient_file: str, send_eval_d
         print(f"WORKER: Notified server to expect {num_subgradients} gradients.")
 
         # 2.3 Send each gradient using the MLT protocol
-        socks = {"tcp": tcp_sock, "udp": udp_sock}
-        # FIX: Correctly define the server address for MLT functions
-        server_addr_for_mlt = (server_ip, server_port)
+        socks: dict[str, socket.socket] = {"tcp": tcp_sock, "udp": udp_sock}
+        # server_addr_for_mlt = (server_ip, server_port)
+        addrs: dict[str, tuple] = {"tcp": (server_ip, server_port), "udp": (server_ip, server_port + 1)}
 
         for key, tensor in tensor_dict.items():
             print(f"\nWORKER: Processing '{key}' for sending...")
@@ -89,10 +89,12 @@ def run_worker(server_ip: str, server_port: int, gradient_file: str, send_eval_d
             # tcp_sock.connect((server_ip, server_port))  # Reconnect for MLT send
 
             # This function sends the tensor bytes via the MLT UDP protocol
-            success = mlt.send_data_mlt(socks, server_addr_for_mlt, tensor_data_bytes)
+            success = mlt.send_data_mlt(socks, addrs, tensor_data_bytes)
             if not success:
                 print(f"WORKER ERROR: Failed to send tensor data for key '{key}' using MLT. Aborting.")
                 return
+            else:
+                print(f"\n--- WORKER successfully sent all the tensor data for key '{key}' ---")
 
         # *** CRUCIAL: DO NOT CLOSE SOCKETS HERE. MOVE TO RECEIVE PHASE. ***
 
@@ -100,7 +102,13 @@ def run_worker(server_ip: str, server_port: int, gradient_file: str, send_eval_d
 
         # --- 3. RECEIVE PHASE ---
         # The same 'socks' dictionary is passed to the receiver function
-        avg_gradients = mlt.recv_data_mlt(socks)
+        avg_gradients_tuple = mlt.recv_data_mlt(socks)
+
+        if not avg_gradients_tuple:
+            raise ValueError("WORKER failed to receive averaged gradients")
+
+        # we won't need udp_addr here because we won't send anything out anymore
+        avg_gradients, _ = avg_gradients_tuple
 
         # --- 4. PROCESS AND SAVE RESULTS ---
         if avg_gradients:
