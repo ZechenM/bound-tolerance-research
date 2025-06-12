@@ -69,7 +69,7 @@ def run_server():
 
             # 2. Send the number of tensors (layers) in the dictionary
             # Use the connection socket 'conn'
-            num_subgradients = len(avg_gradients)
+            num_subgradients = len(avg_gradients) - 2 if "epoch" in avg_gradients else len(avg_gradients)
             try:
                 conn.sendall(struct.pack("!I", num_subgradients))
                 print(f"SERVER: Notified server to expect {num_subgradients} gradients.")
@@ -80,6 +80,7 @@ def run_server():
             for key, tensor in avg_gradients.items():
                 if not isinstance(tensor, torch.Tensor):
                     print(f"Warning: Item with key '{key}' is not a tensor, skipping.")
+                    print(f"    Value is likely eval data: {tensor}")
                     continue
 
                 # This function now sends metadata on 'conn' and returns the tensor bytes
@@ -95,7 +96,7 @@ def run_server():
                 if not success:
                     raise ValueError(f"SERVER ERROR: Failed to send tensor data for key '{key}' using MLT. Aborting.")
                 else:
-                    print(f"\n--- SERVER successfully sent all the tensor data for key '{key}' ---")
+                    print(f"\n--- SERVER successfully sent all the tensor data for key '{key}' ---\n")
 
         print(f"\nFinished echo transaction with TCP:{tcp_addr} and UDP:{udp_addr}. Closing connection.")
 

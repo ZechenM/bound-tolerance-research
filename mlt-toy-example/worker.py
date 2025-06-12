@@ -53,6 +53,7 @@ def run_worker(server_ip: str, server_port: int, gradient_file: str, send_eval_d
 
         # --- 2. SEND PHASE ---
         print("\n--- Sending gradients to server ---")
+        send_eval_data = True
 
         # 2.1 Send evaluation signal and data if applicable
         if send_eval_data:

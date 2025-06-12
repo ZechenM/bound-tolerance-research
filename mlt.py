@@ -318,8 +318,7 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
         eval_acc_bytes = _recv_all(tcp_sock, 4)
         epoch_bytes = _recv_all(tcp_sock, 4)
         if not eval_acc_bytes or not epoch_bytes:
-            print("RECEIVER ERROR: Failed to receive eval data after 'E' signal.")
-            return None
+            raise ValueError("RECEIVER ERROR: Failed to receive eval data after 'E' signal.")
         eval_acc = struct.unpack("!f", eval_acc_bytes)[0]
         curr_epoch = struct.unpack("!f", epoch_bytes)[0]
         final_gradients_dict["eval_acc"] = eval_acc
