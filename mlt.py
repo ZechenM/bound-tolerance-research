@@ -464,6 +464,17 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
                         received_chunks[seq] = packet[12:]
                         byte_idx, bit_idx = divmod(seq, 8)
                         bitmap[byte_idx] |= 1 << bit_idx
+                    
+                    # ZM 6/12/2025: add one more case for the stop signal to send out
+                    # rather than only send out early stop 'S' after receiving probe 'P'
+                    # we can send it out anytime once the loss tolerace threshold has been met
+                    if total_chunks > 0 and (received_chunks.count(None) / total_chunks) <= config.loss_tolerance:
+                        if config.DEBUG:
+                            print("RECEIVER MLT: sending early stop signal before probing.")
+                            print(f"RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
+                        has_stopped = True
+                        tcp_sock.sendall(b"S")
+                        break
 
                 if tcp_sock in readable:
                     signal = _recv_all(tcp_sock, 1)
@@ -524,6 +535,7 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
                 # If chunk is missing, append zeros of the *correct* size
                 if config.DEBUG:
                     print(f"RECEIVER MLT: Zero-filling missing chunk #{i} with {expected_chunk_size} bytes.")
+                    print("RECEIVER MLT: It might not be missing; could be the case of meeting loss tolerance threshold")
                 final_data_list.append(b"\x00" * expected_chunk_size)
 
         final_tensor_data_as_bytes = b"".join(final_data_list)

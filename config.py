@@ -26,7 +26,7 @@ DEBUG = 1
 protocol = ["TCP", "MLT"][1]
 
 # config 6: bounded-loss tolerance
-loss_tolerance = 0
+loss_tolerance = 0.6
 CHUNK_SIZE = 1024
 
 # config 7: Mappings for Dtypes
