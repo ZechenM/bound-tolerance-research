@@ -8,6 +8,7 @@ import torch
 # Make sure the mlt module can be found
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import mlt  # Assuming this is the name of your file from the Canvas
+import config
 
 
 # --- Main Server Logic ---
@@ -46,6 +47,9 @@ def run_server():
             # udp addr is a tuple of udp_host, udp_port
             received_gradients, udp_addr = received_tuple
             addrs["udp"] = udp_addr
+
+            if config.DEBUG:
+                print(f"Worker UDP: {udp_addr}")
 
             # In a real scenario, you'd wait for gradients from all workers here.
             # For this toy example, we just "average" by echoing.
