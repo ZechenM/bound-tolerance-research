@@ -176,6 +176,8 @@ class MLServer:
                             self.aggregation_complete_event.clear()  # Clear event from previous round
                             self.is_buffer_full_condition.notify()
 
+                # ---------- memory barrier --------------------------
+                
                 # --- ROUND-TRIP LOGIC: Wait for aggregation and send back ---
                 print(f"[{tcp_addr}] Waiting for aggregation to complete...")
                 self.aggregation_complete_event.wait()  # Wait until aggregator sets the event
