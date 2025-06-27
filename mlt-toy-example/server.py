@@ -7,8 +7,8 @@ import torch
 
 # Make sure the mlt module can be found
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import mlt  # Assuming this is the name of your file from the Canvas
 import config
+import mlt  # Assuming this is the name of your file from the Canvas
 
 
 # --- Main Server Logic ---

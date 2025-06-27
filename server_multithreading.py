@@ -1,49 +1,67 @@
-# server.py
-import json
-import os
 import socket
 import struct
-import sys
 import threading
 import traceback
+from enum import Enum
 
 import torch
 
-# Assuming mlt.py is in the parent directory
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import config
 import mlt
 
 
-class MLServer:
+class TrainingPhase(Enum):
+    BEGIN = 0
+    MID = 1
+    FINAL = 2
+
+
+class Server:
     def __init__(self, host="0.0.0.0", tcp_port=9999, num_workers=3):
+        # TCP setup
         self.host = host
         self.tcp_port = tcp_port
         self.tcp_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.tcp_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
+        # training setup
+        self.training_phase = TrainingPhase.BEGIN
+        self.prev_avg_acc = 0.0
+        self.drop_rate = 0.0
+
+        # worker setup
+        self.worker_eval_acc = []
+        self.worker_epochs = []
+        self.worker_threads = []
+
         self.num_workers = num_workers
         self.received_gradients = []
         self.aggregation_round = 0
 
-        # --- ROUND-TRIP LOGIC: Synchronization Primitives ---
-        # Lock for controlling access to shared gradient buffers
+        # multithreading setup
         self.lock = threading.Lock()
-        # Condition to signal when the gradient buffer is full
-        self.is_buffer_full_condition = threading.Condition(self.lock)
-        # Event to signal to all worker threads that aggregation is complete
+        self.is_buffer_full = threading.Condition(self.lock)
         self.aggregation_complete_event = threading.Event()
-        # The averaged gradients to be sent back to workers
         self.averaged_gradients = {}
-        # --- END ---
 
+        # server setup
         self.running = True
-        self.worker_threads = []
+        self.tcp_connections = []
+        self.conn_addr_map = {}
+
+    def write_to_server_port(self):
+        print("Writing server TCP port to .server_port file...")
+        with open(".server_port", "w") as f:
+            f.write(str(self.tcp_port))
+            f.flush()
 
     def start(self):
-        """Binds the main TCP listening port and starts accepting connections."""
+        """
+        Binds the main TCP listening port and starts accepting connections.
+        """
         self.tcp_server.bind((self.host, self.tcp_port))
         self.tcp_server.listen(3)
-        print(f"Server listening on {self.host}:{self.tcp_port} for {self.num_workers} workers.")
+        print(f"Server listening on {self.host}:{self.tcp_port} for {self.num_workers} workers")
 
         aggregator_thread = threading.Thread(target=self.gradient_aggregator_loop)
         aggregator_thread.daemon = True
@@ -52,12 +70,14 @@ class MLServer:
         try:
             while self.running:
                 client_tcp_sock, addr = self.tcp_server.accept()
-                print(f"\n ----- Accepted TCP connection from {addr} -------")
+                self.tcp_connections.append(client_tcp_sock)
+                self.conn_addr_map[client_tcp_sock] = addr
+
+                print(f"\n ------ Accepted TCP connection from {addr} ------")
 
                 thread = threading.Thread(target=self.handle_worker, args=(client_tcp_sock, addr))
                 thread.start()
                 self.worker_threads.append(thread)
-
         except KeyboardInterrupt:
             print("Server shutting down.")
         finally:
@@ -66,16 +86,18 @@ class MLServer:
     def gradient_aggregator_loop(self):
         """A loop that waits for all gradients, aggregates them, and signals workers to send."""
         while self.running:
-            with self.is_buffer_full_condition:
+            with self.is_buffer_full:
                 while len(self.received_gradients) < self.num_workers:
                     print(f"[Aggregator] Waiting... ({len(self.received_gradients)}/{self.num_workers} gradients received)")
-                    self.is_buffer_full_condition.wait()
+                    self.is_buffer_full.wait()
 
                 print(
                     f"\n[Aggregator] Woke up. Number of gradients received: {len(self.received_gradients)}. Starting aggregation for round {self.aggregation_round}."
                 )
 
                 all_gradients = self.received_gradients
+
+                # no need to worry about the epoch / eval metadata
                 gradient_keys = [k for k in all_gradients[0].keys() if isinstance(all_gradients[0][k], torch.Tensor)]
 
                 averaged_gradients = {}
@@ -87,16 +109,6 @@ class MLServer:
 
                 # --- ROUND-TRIP LOGIC: Prepare for broadcast ---
                 self.averaged_gradients = averaged_gradients
-
-                json_filename = f"server_averaged_gradients_round_{self.aggregation_round}.json"
-                with open(json_filename, "w") as f:
-                    json.dump(
-                        {k: v.tolist() for k, v in averaged_gradients.items()},
-                        f,
-                        indent=4,
-                    )
-                print(f"[Aggregator] Averaged gradients saved to {json_filename}")
-
                 self.received_gradients.clear()
                 self.aggregation_round += 1
 
@@ -104,31 +116,14 @@ class MLServer:
                 self.aggregation_complete_event.set()
                 print("[Aggregator] Event set. Worker threads will now send averaged gradients back.\n")
 
-                if self.aggregation_round == 1:
-                    print("[Aggregator] Target round 1 reached. Initiating server shutdown.")
-                    self.running = False
-                    # We must wake up any waiting threads so they can check the self.running flag and exit.
-                    self.is_buffer_full_condition.notify_all()
-                    self._unblock_main_thread()
-            # --- END ---
-
-    def _unblock_main_thread(self):
-        """Creates a dummy connection to the server to unblock the main thread's accept() call."""
-        try:
-            # Use 127.0.0.1 for the dummy connection host
-            # only need to make sure accept() accepts one connection
-            # then it will move forward checking the condition of while loop, which would terminate
-            with socket.create_connection(("127.0.0.1", self.tcp_port), timeout=1):
-                pass
-        except (socket.timeout, ConnectionRefusedError):
-            # This can happen if the server socket is already closed, which is fine.
-            pass
-
     def handle_worker(self, client_tcp_sock, tcp_addr):
         """Manages the full round-trip lifecycle for a single worker."""
         dedicated_udp_sock = None
+        self.has_eval_acc = False
+
         try:
             dedicated_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # ask OS to find an ephemeral port
             dedicated_udp_sock.bind((self.host, 0))
             udp_port = dedicated_udp_sock.getsockname()[1]
             client_tcp_sock.sendall(struct.pack("!I", udp_port))
@@ -148,15 +143,34 @@ class MLServer:
 
                 if gradients:
                     print(f"[{tcp_addr}] Received gradient bundle from {worker_udp_addr}.")
-                    with self.is_buffer_full_condition:
+                    if "epoch" in gradients:
+                        self.has_eval_acc = True
+
+                    with self.is_buffer_full:
                         self.received_gradients.append(gradients)
                         print(f"[{tcp_addr}] Added gradients to buffer ({len(self.received_gradients)}/{self.num_workers}).")
                         if len(self.received_gradients) == self.num_workers:
                             print(f"[{tcp_addr}] Final gradient received. Notifying aggregator.")
                             self.aggregation_complete_event.clear()  # Clear event from previous round
-                            self.is_buffer_full_condition.notify()
+                            self.is_buffer_full.notify()
 
                 # ---------- memory barrier --------------------------
+
+                # ---------- logic for training phase update BEGINS ---------
+                if self.has_eval_acc:
+                    self._training_phase_update()
+
+                if self.training_phase == TrainingPhase.BEGIN:
+                    self.drop_rate = config.BEGIN_DROP
+                elif self.training_phase == TrainingPhase.MID:
+                    self.drop_rate = config.MID_DROP
+                elif self.training_phase == TrainingPhase.FINAL:
+                    self.drop_rate = config.FINAL_DROP
+
+                if self.has_eval_acc:
+                    print(f"Current drop rate: {self.drop_rate}\n")
+
+                # ---------- logic for training phase update ENDS -----------
 
                 # --- ROUND-TRIP LOGIC: Wait for aggregation and send back ---
                 print(f"[{tcp_addr}] Waiting for aggregation to complete...")
@@ -166,7 +180,7 @@ class MLServer:
 
                 addrs["udp"] = worker_udp_addr
 
-                # Use a new function to send the whole dictionary
+                # Use a new function to SEND BACK the whole dictionary
                 self.send_gradient_dict(socks, addrs)
                 print(f"[{tcp_addr}] Finished sending averaged gradients. Ready for next round.")
 
@@ -220,14 +234,54 @@ class MLServer:
     def shutdown(self):
         self.running = False
         self.tcp_server.close()
-        with self.is_buffer_full_condition:
-            self.is_buffer_full_condition.notify_all()
+        with self.is_buffer_full:
+            self.is_buffer_full.notify_all()
         self.aggregation_complete_event.set()
         for t in self.worker_threads:
             t.join()
         print("Server shutdown complete.")
 
+    # -------------- HELPER FUNCTIONS ---------------------------------------
+    def _training_phase_update(self):
+        if len(self.worker_eval_acc) < 3:
+            self.has_eval_acc = False
+            return
+
+        curr_avg_acc = sum(self.worker_eval_acc) / len(self.worker_eval_acc)
+        acc_diff = curr_avg_acc - self.prev_avg_acc
+
+        proposed_phase = self.training_phase  # Initially set as current phase
+
+        if any(self.worker_epochs) == 0:
+            proposed_phase = TrainingPhase.BEGIN
+        elif acc_diff > 0.07:
+            proposed_phase = TrainingPhase.BEGIN
+        elif curr_avg_acc > 0.5:
+            if acc_diff < 0.03:
+                proposed_phase = TrainingPhase.FINAL
+            elif acc_diff <= 0.07:
+                proposed_phase = TrainingPhase.MID
+            else:
+                proposed_phase = TrainingPhase.BEGIN
+        # Ensure no phase transitions if the accuracy is not above 50%, even if acc_diff is low
+        else:
+            proposed_phase = TrainingPhase.BEGIN
+
+        # Ensure one-way state transitions:
+        if proposed_phase.value >= self.training_phase.value:
+            self.training_phase = proposed_phase
+
+        self.prev_avg_acc = curr_avg_acc
+
+        print(f"All worker eval acc: {self.worker_eval_acc}")
+        print(f"All worker epochs: {self.worker_epochs}")
+        print(f"Current averaged accuracy: {self.prev_avg_acc}")
+        print(f"Current training phase: {self.training_phase}")
+
+        self.worker_eval_acc.clear()
+        self.worker_epochs.clear()
+
 
 if __name__ == "__main__":
-    server = MLServer(num_workers=3)
+    server = Server(num_workers=3)
     server.start()

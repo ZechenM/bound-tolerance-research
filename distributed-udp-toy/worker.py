@@ -1,13 +1,14 @@
 # worker.py
+import argparse
+import json
+import os
 import socket
 import struct
-import time
-import torch
-import argparse
-import helper
 import sys
-import os
-import json
+import time
+
+import helper
+import torch
 
 # Assuming mlt.py is in the parent directory
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -29,9 +30,7 @@ class MLWorker:
             # Connect to the main TCP listening port
             self.tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.tcp_sock.connect((self.server_host, self.tcp_port))
-            print(
-                f"[Worker {self.id}] Successfully connected to server at {self.server_host}:{self.tcp_port}"
-            )
+            print(f"[Worker {self.id}] Successfully connected to server at {self.server_host}:{self.tcp_port}")
 
             # 1. After connecting, immediately wait to receive a 4-byte message.
             #    This contains the dedicated UDP port the server has assigned for us.
@@ -41,9 +40,7 @@ class MLWorker:
 
             # 2. Unpack into an integer to get the port number.
             self.dedicated_server_udp_port = struct.unpack("!I", port_data)[0]
-            print(
-                f"[Worker {self.id}] Received dedicated server UDP port: {self.dedicated_server_udp_port}"
-            )
+            print(f"[Worker {self.id}] Received dedicated server UDP port: {self.dedicated_server_udp_port}")
 
             # Create the worker's own UDP socket to send from
             self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -70,14 +67,10 @@ class MLWorker:
             for key, tensor in gradients_dict.items():
                 print(f"[Worker {self.id}] Sending gradient for key: '{key}'")
 
-                payload_bytes = mlt.serialize_gradient_to_custom_binary(
-                    self.tcp_sock, key, tensor
-                )
+                payload_bytes = mlt.serialize_gradient_to_custom_binary(self.tcp_sock, key, tensor)
 
                 if payload_bytes is None:
-                    print(
-                        f"[Worker {self.id}] Failed to serialize gradient for key '{key}'. Aborting."
-                    )
+                    print(f"[Worker {self.id}] Failed to serialize gradient for key '{key}'. Aborting.")
                     return
 
                 socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
@@ -87,13 +80,9 @@ class MLWorker:
                 success = mlt.send_data_mlt(socks, addrs, payload_bytes)
 
                 if success:
-                    print(
-                        f"[Worker {self.id}] Successfully completed transmission for key '{key}'."
-                    )
+                    print(f"[Worker {self.id}] Successfully completed transmission for key '{key}'.")
                 else:
-                    print(
-                        f"[Worker {self.id}] Failed to transmit data for key '{key}'."
-                    )
+                    print(f"[Worker {self.id}] Failed to transmit data for key '{key}'.")
                     break
 
             print(f"[Worker {self.id}] --- Finished gradient transmission ---")
@@ -131,9 +120,9 @@ if __name__ == "__main__":
             "layer1.weights": torch.randn(2, 2),
             "layer1.bias": torch.randn(2),
         }
-        
+
         gradients_for_json = helper.tensors_to_lists(dummy_gradients)
-        
+
         json_filename = f"dummy_gradient_{worker_id}.json"
         with open(json_filename, "w") as f:
             json.dump(gradients_for_json, f, indent=4)

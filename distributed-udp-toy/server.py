@@ -1,12 +1,13 @@
 # server.py
-import socket
-import threading
-import struct
-import traceback
 import json
-import torch
-import sys
 import os
+import socket
+import struct
+import sys
+import threading
+import traceback
+
+import torch
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import mlt  # Import the user's mlt module
@@ -34,15 +35,11 @@ class MLServer:
         """Binds the main TCP listening port and starts accepting connections."""
         self.tcp_server.bind((self.host, self.tcp_port))
         self.tcp_server.listen(3)
-        print(
-            f"Server listening on {self.host}:{self.tcp_port} for {self.num_workers} workers."
-        )
+        print(f"Server listening on {self.host}:{self.tcp_port} for {self.num_workers} workers.")
 
         # --- NEW: Start the aggregator thread ---
         aggregator_thread = threading.Thread(target=self.gradient_aggregator_loop)
-        aggregator_thread.daemon = (
-            True  # Allows main program to exit if this is the only thread left
-        )
+        aggregator_thread.daemon = True  # Allows main program to exit if this is the only thread left
         aggregator_thread.start()
         # --- END NEW ---
 
@@ -51,9 +48,7 @@ class MLServer:
                 client_tcp_sock, addr = self.tcp_server.accept()
                 print(f"Accepted TCP connection from {addr}")
 
-                thread = threading.Thread(
-                    target=self.handle_worker, args=(client_tcp_sock, addr)
-                )
+                thread = threading.Thread(target=self.handle_worker, args=(client_tcp_sock, addr))
                 thread.start()
                 self.worker_threads.append(thread)
 
@@ -68,9 +63,7 @@ class MLServer:
             with self.condition:
                 # Wait until the buffer is full
                 while len(self.received_gradients) < self.num_workers:
-                    print(
-                        f"[Aggregator] Waiting... ({len(self.received_gradients)}/{self.num_workers} gradients received)"
-                    )
+                    print(f"[Aggregator] Waiting... ({len(self.received_gradients)}/{self.num_workers} gradients received)")
                     self.condition.wait()  # Releases the lock and waits to be notified
 
                 print(
@@ -79,29 +72,19 @@ class MLServer:
 
                 # --- 1. Average the gradients ---
                 all_gradients = self.received_gradients
-                gradient_keys = [
-                    k
-                    for k in all_gradients[0].keys()
-                    if isinstance(all_gradients[0][k], torch.Tensor)
-                ]
+                gradient_keys = [k for k in all_gradients[0].keys() if isinstance(all_gradients[0][k], torch.Tensor)]
 
                 averaged_gradients = {}
                 for key in gradient_keys:
                     # Stack all tensors for a given key and calculate the mean along the first dimension
-                    stacked_tensors = torch.stack(
-                        [worker_grads[key] for worker_grads in all_gradients]
-                    )
+                    stacked_tensors = torch.stack([worker_grads[key] for worker_grads in all_gradients])
                     averaged_gradients[key] = torch.mean(stacked_tensors, dim=0)
 
                 print(f"[Aggregator] Averaging complete for keys: {gradient_keys}")
 
                 # --- 2. Export the averaged gradients to a JSON file ---
-                gradients_for_json = {
-                    key: tensor.tolist() for key, tensor in averaged_gradients.items()
-                }
-                json_filename = (
-                    f"averaged_gradients_round_{self.aggregation_round}.json"
-                )
+                gradients_for_json = {key: tensor.tolist() for key, tensor in averaged_gradients.items()}
+                json_filename = f"averaged_gradients_round_{self.aggregation_round}.json"
 
                 with open(json_filename, "w") as f:
                     json.dump(gradients_for_json, f, indent=4)
@@ -125,34 +108,24 @@ class MLServer:
             socks = {"tcp": client_tcp_sock, "udp": dedicated_udp_sock}
 
             while self.running:
-                print(
-                    f"[{tcp_addr}] Waiting to receive new gradient data from worker..."
-                )
+                print(f"[{tcp_addr}] Waiting to receive new gradient data from worker...")
                 result = mlt.recv_data_mlt(socks)
 
                 if result is None:
-                    print(
-                        f"[{tcp_addr}] Worker has disconnected gracefully. Closing thread."
-                    )
+                    print(f"[{tcp_addr}] Worker has disconnected gracefully. Closing thread.")
                     break
 
                 gradients, worker_udp_addr = result
 
                 if gradients:
-                    print(
-                        f"[{tcp_addr}] Successfully received gradient bundle from {worker_udp_addr}."
-                    )
+                    print(f"[{tcp_addr}] Successfully received gradient bundle from {worker_udp_addr}.")
 
                     # --- NEW: Add gradients to buffer and notify aggregator ---
                     with self.condition:
                         self.received_gradients.append(gradients)
-                        print(
-                            f"[{tcp_addr}] Added gradients to buffer. Buffer size is now {len(self.received_gradients)}."
-                        )
+                        print(f"[{tcp_addr}] Added gradients to buffer. Buffer size is now {len(self.received_gradients)}.")
                         if len(self.received_gradients) == self.num_workers:
-                            print(
-                                f"[{tcp_addr}] All {self.num_workers} gradients received. Notifying aggregator."
-                            )
+                            print(f"[{tcp_addr}] All {self.num_workers} gradients received. Notifying aggregator.")
                             self.condition.notify()  # Wake up the aggregator thread
                     # --- END NEW ---
                 else:

@@ -464,7 +464,7 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
                         received_chunks[seq] = packet[12:]
                         byte_idx, bit_idx = divmod(seq, 8)
                         bitmap[byte_idx] |= 1 << bit_idx
-                    
+
                     # ZM 6/12/2025: add one more case for the stop signal to send out
                     # rather than only send out early stop 'S' after receiving probe 'P'
                     # we can send it out anytime once the loss tolerace threshold has been met

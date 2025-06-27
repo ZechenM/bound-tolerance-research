@@ -1,13 +1,15 @@
 # worker.py
+import argparse  # Import for command-line argument parsing
+import json  # Import the json library for file export
+import os
 import socket
 import struct
-import time
-import torch
-import json  # Import the json library for file export
-import argparse  # Import for command-line argument parsing
-import os
 import sys
+import time
+
 import helper
+import torch
+
 # Assuming mlt.py is in the parent directory
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import mlt
@@ -29,21 +31,15 @@ class MLWorker:
         try:
             self.tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.tcp_sock.connect((self.server_host, self.tcp_port))
-            print(
-                f"[Worker {self.id}] Successfully connected to server at {self.server_host}:{self.tcp_port}"
-            )
+            print(f"[Worker {self.id}] Successfully connected to server at {self.server_host}:{self.tcp_port}")
 
             port_data = mlt._recv_all(self.tcp_sock, 4)
             if not port_data:
-                print(
-                    f"[Worker {self.id}] Failed to receive dedicated UDP port from server."
-                )
+                print(f"[Worker {self.id}] Failed to receive dedicated UDP port from server.")
                 return False
 
             self.dedicated_server_udp_port = struct.unpack("!I", port_data)[0]
-            print(
-                f"[Worker {self.id}] Received dedicated server UDP port: {self.dedicated_server_udp_port}"
-            )
+            print(f"[Worker {self.id}] Received dedicated server UDP port: {self.dedicated_server_udp_port}")
 
             self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             return True
@@ -56,25 +52,21 @@ class MLWorker:
         """Runs the main training loop of sending local and receiving global gradients."""
         while self.running:
             try:
-                print(
-                    f"\n[Worker {self.id}] --- Starting training round {self.round} ---"
-                )
+                print(f"\n[Worker {self.id}] --- Starting training round {self.round} ---")
 
                 # 1. Create and send local gradients
                 local_gradients = {
                     "layer1.weights": torch.randn(2, 2),
                     "layer1.bias": torch.randn(2),
                 }
-                
+
                 helper.write_to_json(self.id, helper.tensors_to_lists(local_gradients))
-                
+
                 self.send_gradients(local_gradients)
 
                 # --- ROUND-TRIP LOGIC: Receive averaged gradients ---
                 # 2. Wait to receive the globally averaged gradients from the server
-                print(
-                    f"[Worker {self.id}] Gradients sent. Waiting to receive averaged model back..."
-                )
+                print(f"[Worker {self.id}] Gradients sent. Waiting to receive averaged model back...")
                 socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
                 result = mlt.recv_data_mlt(socks)
 
@@ -85,14 +77,12 @@ class MLWorker:
 
                 averaged_gradients, _ = result
                 print(f"[Worker {self.id}] Successfully received averaged gradients.")
-                
+
                 if averaged_gradients is None:
                     raise ValueError(f"[WORKER {self.id}] failed to receive averaged gradients back from the server")
 
                 # 3. Save the received gradients to a JSON file
-                json_filename = (
-                    f"worker_{self.id}_received_averaged_round_{self.round}.json"
-                )
+                json_filename = f"worker_{self.id}_received_averaged_round_{self.round}.json"
                 with open(json_filename, "w") as f:
                     json.dump(
                         {k: v.tolist() for k, v in averaged_gradients.items()},
@@ -103,7 +93,7 @@ class MLWorker:
                 # --- END ---
 
                 self.round += 1
-                
+
                 if self.round == 1:
                     self.running = False
                     break
@@ -126,26 +116,20 @@ class MLWorker:
         self.tcp_sock.sendall(struct.pack("!I", len(gradients_dict)))
 
         for key, tensor in gradients_dict.items():
-            payload_bytes = mlt.serialize_gradient_to_custom_binary(
-                self.tcp_sock, key, tensor
-            )
+            payload_bytes = mlt.serialize_gradient_to_custom_binary(self.tcp_sock, key, tensor)
             if payload_bytes is not None:
                 socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
                 addrs = {"udp": (self.server_host, self.dedicated_server_udp_port)}
                 addrs["tcp"] = (self.server_host, self.tcp_port)
-                
+
                 success = mlt.send_data_mlt(socks, addrs, payload_bytes)
 
                 if success:
-                    print(
-                        f"[Worker {self.id}] Successfully completed transmission for key '{key}'."
-                    )
+                    print(f"[Worker {self.id}] Successfully completed transmission for key '{key}'.")
                 else:
-                    print(
-                        f"[Worker {self.id}] Failed to transmit data for key '{key}'."
-                    )
+                    print(f"[Worker {self.id}] Failed to transmit data for key '{key}'.")
                     break
-                
+
         print(f"[Worker {self.id}] Finished sending gradients.")
 
     def close(self):

@@ -67,3 +67,8 @@ TORCH_TO_NUMPY_DTYPE = {
 }
 
 STR_TO_NUMPY_DTYPE = {str(k): v for k, v in TORCH_TO_NUMPY_DTYPE.items()}
+
+# config 8: drop rate
+BEGIN_DROP = 0.0
+MID_DROP = 0.0
+FINAL_DROP = 0.0
