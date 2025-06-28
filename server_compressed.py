@@ -28,6 +28,18 @@ class Server:
         self.worker_eval_acc = []
         self.worker_epochs = []
 
+        # CLR configurations
+        self.is_CLR_epoch = False
+        self.CLR_lst = []
+        self.CLR_eta = 0.5
+        self.CLR_prev_grad_norm = 0.0
+        self.CLR_curr_grad_norm = 0.0
+        # Accordion detect CLR per 10 epoch on CIFAR-10. That is, its compression strategy is unchanged across 10 epochs.
+        # But their compression is operated on per parameter of the model, or each parameter can have diff compression strategy.
+        # I guess in our case, we surely can decide per 10 epoch or per epoch(I prefer this), and then decide the MLT tolerance value
+        # base on this CLR knowledge.
+
+    
         self.drop_rate = 0.0  # X% probability to zero out gradients
 
         # v-threshold configurations and trackers
