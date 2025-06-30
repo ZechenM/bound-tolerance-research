@@ -48,6 +48,8 @@ class Server:
         self.running = True
         self.tcp_connections = []
         self.conn_addr_map = {}
+        
+        self.write_to_server_port()
 
     def write_to_server_port(self):
         print("Writing server TCP port to .server_port file...")

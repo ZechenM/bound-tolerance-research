@@ -200,6 +200,8 @@ class DistributedTrainerMultithreading(Trainer):
             print(f"[Worker {self.id}] Not connected. Cannot send gradients.")
             return
 
+        gradients_round = 0
+        
         print(f"[Worker {self.id}] Starting to send {len(gradients_dict)} gradients...")
 
         if self.sent_eval:
@@ -221,12 +223,14 @@ class DistributedTrainerMultithreading(Trainer):
                 addrs["tcp"] = (self.server_host, self.tcp_port)
 
                 success = mlt.send_data_mlt(socks, addrs, payload_bytes)
+                
+                while not success:
+                    gradients_round += 1
+                    print(f"[Worker {self.id}] Failed to transmit data for key '{key}' for {gradients_round} time.")
+                    success = mlt.send_data_mlt(socks, addrs, payload_bytes)                
 
-                if success:
-                    print(f"[Worker {self.id}] Successfully completed transmission for key '{key}'.")
-                else:
-                    print(f"[Worker {self.id}] Failed to transmit data for key '{key}'.")
-                    break
+                print(f"Out of success while loop, value of success: {success}")
+                print(f"[Worker {self.id}] Successfully completed transmission for key '{key}'.")
 
         print(f"[Worker {self.id}] Finished sending gradients.")
 

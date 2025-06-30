@@ -35,7 +35,7 @@ fi
 if [ -n "$3" ]; then
     CLA_SERVER_PORT="$3"
 else
-    CLA_SERVER_PORT="60001"  # Default port, change as needed
+    CLA_SERVER_PORT="9999"  # Default port, change as needed
 fi
 
 # Construct LOG_DIR with optional data and experiment descriptions
@@ -60,8 +60,8 @@ echo "LOGS: ${LOG_DIR}"
 # Remove old server port file if exists
 rm -f .server_port
 
-SERVER_SCRIPT="server_compressed.py"
-WORKER_SCRIPT="worker_trainer.py"
+SERVER_SCRIPT="server_multithreading.py"
+WORKER_SCRIPT="worker_multithreading.py"
 SERVER_LOG="${LOG_DIR}/server_dynamic_bound_loss_log.txt"
 WORKER0_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log0.txt"
 WORKER1_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log1.txt"
@@ -84,7 +84,7 @@ WORKER2_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log2.txt"
 touch "$SERVER_LOG" "$WORKER0_LOG" "$WORKER1_LOG" "$WORKER2_LOG"
 
 # Start the server and redirect output to SERVER_LOG
-python -u ./$SERVER_SCRIPT --port "$CLA_SERVER_PORT" > "$SERVER_LOG" 2>&1 &
+python -u ./$SERVER_SCRIPT > "$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 echo "Server PID: $SERVER_PID; started on $CLA_SERVER_PORT (read by shell script)"
 
@@ -137,9 +137,9 @@ sleep 3
 # If the port was found, proceed with workers
 if $FOUND_PORT; then
     echo "Server started successfully. Starting workers..."
-    python -u ./$WORKER_SCRIPT 0 "localhost" $SERVER_PORT > "$WORKER0_LOG" 2>&1 &
-    python -u ./$WORKER_SCRIPT 1 "localhost" $SERVER_PORT > "$WORKER1_LOG" 2>&1 &
-    python -u ./$WORKER_SCRIPT 2 "localhost" $SERVER_PORT > "$WORKER2_LOG" 2>&1 &
+    python -u ./$WORKER_SCRIPT 0 > "$WORKER0_LOG" 2>&1 &
+    python -u ./$WORKER_SCRIPT 1 > "$WORKER1_LOG" 2>&1 &
+    python -u ./$WORKER_SCRIPT 2 > "$WORKER2_LOG" 2>&1 &
 else
     echo "Server did not start successfully."
     exit 1
