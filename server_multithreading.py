@@ -40,6 +40,7 @@ class Server:
 
         # multithreading setup
         self.lock = threading.Lock()
+        self.recv_lock = threading.Lock()
         self.is_buffer_full = threading.Condition(self.lock)
         self.aggregation_complete_event = threading.Event()
         self.averaged_gradients = {}
@@ -48,7 +49,7 @@ class Server:
         self.running = True
         self.tcp_connections = []
         self.conn_addr_map = {}
-        
+
         self.write_to_server_port()
 
     def write_to_server_port(self):
@@ -62,7 +63,7 @@ class Server:
         Binds the main TCP listening port and starts accepting connections.
         """
         self.tcp_server.bind((self.host, self.tcp_port))
-        self.tcp_server.listen(3)
+        self.tcp_server.listen(self.num_workers)
         print(f"Server listening on {self.host}:{self.tcp_port} for {self.num_workers} workers")
 
         aggregator_thread = threading.Thread(target=self.gradient_aggregator_loop)
@@ -116,7 +117,7 @@ class Server:
 
                 # Signal to all waiting worker threads that the new gradients are ready
                 self.aggregation_complete_event.set()
-                print("[Aggregator] Event set. Worker threads will now send averaged gradients back.\n")
+                print(f"[Aggregator] Event set for round {self.aggregation_round}. Worker threads will now send averaged gradients back.\n")
 
     def handle_worker(self, client_tcp_sock, tcp_addr):
         """Manages the full round-trip lifecycle for a single worker."""
@@ -136,7 +137,7 @@ class Server:
             while self.running:
                 # 1. Receive gradients from the worker
                 print(f"[{tcp_addr}] Waiting to receive gradients from worker...")
-                result = mlt.recv_data_mlt(socks)
+                result = mlt.recv_data_mlt(socks, tcp_addr, None)
 
                 if result is None:
                     break
@@ -185,10 +186,6 @@ class Server:
                 # Use a new function to SEND BACK the whole dictionary
                 self.send_gradient_dict(socks, addrs)
                 print(f"[{tcp_addr}] Finished sending averaged gradients. Ready for next round.")
-
-                if self.aggregation_round == 1:
-                    self.running = False
-                    break
                 # --- END ---
 
         except (ConnectionResetError, BrokenPipeError):

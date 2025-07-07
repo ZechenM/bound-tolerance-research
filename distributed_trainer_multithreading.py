@@ -48,8 +48,13 @@ class DistributedTrainerMultithreading(Trainer):
         """Establishes connection with the server and gets the dedicated UDP port."""
         try:
             self.tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # self.tcp_sock.setsockopt(
+            #     socket.IPPROTO_TCP, socket.TCP_NODELAY, 1
+            # )  # Disable Nagle's algorithm for low latency
             self.tcp_sock.connect((self.server_host, self.tcp_port))
+            worker_addr = self.tcp_sock.getsockname()
             print(f"[Worker {self.id}] Successfully connected to server at {self.server_host}:{self.tcp_port}")
+            print(f"[Worker {self.id}] Worker itself address: {worker_addr}")
 
             port_data = mlt._recv_all(self.tcp_sock, 4)
             if not port_data:
@@ -168,7 +173,7 @@ class DistributedTrainerMultithreading(Trainer):
 
         print(f"[Worker {self.id}] Gradients sent. Waiting to receive averaged model back...")
         socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
-        result = mlt.recv_data_mlt(socks)
+        result = mlt.recv_data_mlt(socks, (self.server_host, self.tcp_port))
 
         if result is None:
             raise ValueError(f"[Worker {self.id}] Server disconnected. Shutting down.")
@@ -201,7 +206,7 @@ class DistributedTrainerMultithreading(Trainer):
             return
 
         gradients_round = 0
-        
+
         print(f"[Worker {self.id}] Starting to send {len(gradients_dict)} gradients...")
 
         if self.sent_eval:
@@ -223,11 +228,13 @@ class DistributedTrainerMultithreading(Trainer):
                 addrs["tcp"] = (self.server_host, self.tcp_port)
 
                 success = mlt.send_data_mlt(socks, addrs, payload_bytes)
-                
+
                 while not success:
                     gradients_round += 1
+                    if gradients_round > 10:
+                        raise ValueError(f"[Worker {self.id}] Failed to transmit data for key '{key}' after 10 attempts. Shutting down.")
                     print(f"[Worker {self.id}] Failed to transmit data for key '{key}' for {gradients_round} time.")
-                    success = mlt.send_data_mlt(socks, addrs, payload_bytes)                
+                    success = mlt.send_data_mlt(socks, addrs, payload_bytes)
 
                 print(f"Out of success while loop, value of success: {success}")
                 print(f"[Worker {self.id}] Successfully completed transmission for key '{key}'.")

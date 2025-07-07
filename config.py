@@ -72,3 +72,6 @@ STR_TO_NUMPY_DTYPE = {str(k): v for k, v in TORCH_TO_NUMPY_DTYPE.items()}
 BEGIN_DROP = 0.0
 MID_DROP = 0.0
 FINAL_DROP = 0.0
+
+# config 9: tcp max retries
+TCP_MAX_RETRIES = 3  # Maximum number of retries for TCP connections

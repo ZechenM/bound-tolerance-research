@@ -9,17 +9,51 @@ import torch
 import config
 from config import STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE, TORCH_DTYPE_TO_STR, TORCH_TO_NUMPY_DTYPE
 
+# # --- Helper Functions ---
+# def _recv_with_retry(sock: socket.socket, size: int, retries: int = 5) -> bytes | None:
+#     sock.settimeout(1.0)  # Set a timeout for the receive operation
+#     for attempt in range(retries):
+#         try:
+#             data = _recv_all(sock, size)
+#             if data is not None:
+#                 return data
+#         except socket.timeout:
+#             print(f"Socket timeout occurred on attempt {attempt}. Retrying...")
+#             if attempt == retries - 1:
+#                 raise TimeoutError("Max retries reached. Giving up.")
+#             time.sleep(1)  # Wait before retrying
+#         except Exception as e:
+#             raise RuntimeError(f"Error on attempt {attempt}: {e}")
+#     return None
 
-# --- Helper Functions ---
-def _recv_all(conn: socket.socket, size: int) -> bytes | None:
+
+def _recv_all(conn: socket.socket, size: int, recv_lock=None) -> bytes | None:
     """Helper function to reliably receive exactly num_bytes from a TCP socket."""
-    """helper function to receive all data"""
+    # conn.settimeout(60.0)  # Set a timeout for the receive operation
+    # conn.setblocking(False)  # Ensure the socket is in blocking mode
     data = b""
+
+    if recv_lock:
+        recv_lock.acquire()
+    # -------- Critical Section: Ensure thread-safe receiving --------
     while len(data) < size:
-        packet = conn.recv(size - len(data))
-        if not packet:
+        try:
+            # Use a lock to ensure thread-safe receiving
+            packet = conn.recv(size - len(data))
+            if not packet:
+                print("Connection closed by the sender.")
+                return None
+        # except socket.timeout:
+        #     print("Receive operation timed out.")
+        #     return None
+        except Exception as e:
+            print(f"Error receiving data: {e}")
             return None
+
         data += packet
+    # -------- End of Critical Section --------
+    if recv_lock:
+        recv_lock.release()  # Release the lock after receiving data
 
     return data
 
@@ -80,8 +114,15 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
     # !I is unsigned int, 4 bytes
     packed_key_len = struct.pack("!I", len(key_bytes))
 
+    try:
+        tcp_sock.sendall(packed_key_len)  # Send key length first
+        tcp_sock.sendall(key_bytes)  # Then send the key bytes
+    except Exception as e:
+        raise ConnectionError(f"tcp sock connection error: {e}")
+
     if config.DEBUG:
         print(f"Serializing key: {key} (length: {len(key_bytes)})")
+        print("SENDER TCP: Sent packed_key_len and key in bytes")
 
     # 2. Dtype string serialization
     dtype_str = TORCH_DTYPE_TO_STR.get(tensor.dtype)
@@ -102,8 +143,15 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
     # !H is unsigned short, 2 bytes
     packed_dtype_str_len = struct.pack("!I", len(dtype_str_bytes))
 
+    try:
+        tcp_sock.sendall(packed_dtype_str_len)  # Send dtype string length first
+        tcp_sock.sendall(dtype_str_bytes)  # Then send the dtype string bytes
+    except Exception as e:
+        raise ConnectionError(f"tcp sock connection error: {e}")
+
     if config.DEBUG:
         print(f"Serializing dtype: {dtype_str} (length: {len(dtype_str_bytes)})")
+        print("SENDER TCP: Sent packed_dtype_str_len and dtype_str in bytes")
 
     # 3. Shape serialization
     shape = tensor.shape
@@ -113,8 +161,15 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
     # Pack each dimension
     packed_shape_dims = b"".join(struct.pack("!I", dim) for dim in shape)
 
+    try:
+        tcp_sock.sendall(packed_num_dimensions)  # Send number of dimensions first
+        tcp_sock.sendall(packed_shape_dims)  # Then send the shape dimensions
+    except Exception as e:
+        raise ConnectionError(f"tcp sock connection error: {e}")
+
     if config.DEBUG:
         print(f"Serializing shape: {shape} (num_dimensions: {num_dimensions})")
+        print("SENDER TCP: Sent packed_num_dimensions and packed_shape_dims in bytes")
 
     # 4. Tensor data serialization
     # Ensure tensor is on CPU before converting to NumPy array
@@ -126,28 +181,39 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
     tensor_data_bytes = tensor_numpy.tobytes()
     packed_tensor_data_len = struct.pack("!I", len(tensor_data_bytes))
 
-    if config.DEBUG:
-        print(f"Serializing tensor data: {len(tensor_data_bytes)} bytes")
-
-    # 5. send everything but the tensor data bytes through TCP
-    # tensor_data_bytes is sent separately via MLT protocol
-    metadata_bytes = b"".join(
-        [
-            packed_key_len,
-            key_bytes,
-            packed_dtype_str_len,
-            dtype_str_bytes,
-            packed_num_dimensions,
-            packed_shape_dims,
-            packed_tensor_data_len,
-        ]
-    )
     try:
-        tcp_sock.sendall(metadata_bytes)
+        tcp_sock.sendall(packed_tensor_data_len)  # Send tensor data length first
     except Exception as e:
         raise ConnectionError(f"tcp sock connection error: {e}")
+
     if config.DEBUG:
-        print(f"Metadata Sent Through TCP: {len(metadata_bytes)} bytes")
+        print(f"Serializing tensor data: {len(tensor_data_bytes)} bytes")
+        print("SENDER TCP: Sent packed_tensor_data_len in bytes")
+
+    # # 5. send everything but the tensor data bytes through TCP
+    # # tensor_data_bytes is sent separately via MLT protocol
+    # metadata_bytes = b"".join(
+    #     [
+    #         packed_key_len,
+    #         key_bytes,
+    #         packed_dtype_str_len,
+    #         dtype_str_bytes,
+    #         packed_num_dimensions,
+    #         packed_shape_dims,
+    #         packed_tensor_data_len,
+    #     ]
+    # )
+    try:
+        # tcp_sock.sendall(metadata_bytes)
+        # ack = _recv_all(tcp_sock, 1)  # Expecting an ACK byte from the receiver
+        # if not ack or ack != b"A":
+        #     raise ConnectionError("Failed to receive ACK after sending metadata.")
+        pass
+    except Exception as e:
+        raise ConnectionError(f"tcp sock connection error: {e}")
+
+    if config.DEBUG:
+        print("Metadata sent successfully and no ACK sent.")
 
     return tensor_data_bytes
 
@@ -292,7 +358,7 @@ def send_data_mlt(socks: dict, addrs: dict, gradient_payload_bytes: bytes) -> bo
         return False
 
 
-def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
+def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | None, tuple] | None:
     """
     Receives gradient data using the MLT protocol.
     Returns a dictionary of reconstructed gradients.
@@ -307,7 +373,7 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
     # much more robust and less ambiguous than just waiting for data.
 
     # STEP 0: determine if eval_acc and epoch will be sent from the worker
-    eval_signal = _recv_all(tcp_sock, 1)
+    eval_signal = _recv_all(tcp_sock, 1, recv_lock) if recv_lock else _recv_all(tcp_sock, 1)
     if not eval_signal:
         if config.DEBUG:
             print("RECEIVER: Did not receive initial eval signal. Connection may be closed.")
@@ -315,46 +381,51 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
 
     # Case 1: signal is 'E' (eval_acc and epoch will be sent)
     if eval_signal == b"E":
-        eval_acc_bytes = _recv_all(tcp_sock, 4)
-        epoch_bytes = _recv_all(tcp_sock, 4)
+        eval_acc_bytes = _recv_all(tcp_sock, 4, recv_lock) if recv_lock else _recv_all(tcp_sock, 4)
+        epoch_bytes = _recv_all(tcp_sock, 4, recv_lock) if recv_lock else _recv_all(tcp_sock, 4)
         if not eval_acc_bytes or not epoch_bytes:
             raise ValueError("RECEIVER ERROR: Failed to receive eval data after 'E' signal.")
         eval_acc = struct.unpack("!f", eval_acc_bytes)[0]
         curr_epoch = struct.unpack("!f", epoch_bytes)[0]
         final_gradients_dict["eval_acc"] = eval_acc
         final_gradients_dict["epoch"] = curr_epoch
-        print(f"RECEIVER: Received 'E' signal with eval_acc={eval_acc}, epoch={curr_epoch}")
+        print(f"[Worker {tcp_addr}] RECEIVER: Received 'E' signal with eval_acc={eval_acc}, epoch={curr_epoch}")
     # Case 2: signal is 'N' (no eval data will be sent)
     elif eval_signal == b"N":
         print("RECEIVER: Received 'N' signal (no eval data).")
     else:
-        print(f"RECEIVER ERROR: Unrecognized initial signal '{eval_signal}'.")
+        print(f"[Worker {tcp_addr}] RECEIVER ERROR: Unrecognized initial signal '{eval_signal}'.")
         return None
 
     # for each worker, all the important metadata will always be received first through TCP
-    num_subgradients_bytes = _recv_all(tcp_sock, 4)
+    num_subgradients_bytes = _recv_all(tcp_sock, 4, recv_lock) if recv_lock else _recv_all(tcp_sock, 4)
     if not num_subgradients_bytes:
         print("RECEIVER ERROR: Failed to receive the number of sub-gradients.")
         return None
     num_subgradients = struct.unpack("!I", num_subgradients_bytes)[0]
     if config.DEBUG:
-        print(f"RECEIVER: Expecting to receive {num_subgradients} gradients.")
+        print(f"[Worker {tcp_addr}] RECEIVER: Expecting to receive {num_subgradients} gradients.")
+
+    # tcp_sock.setblocking(False)  # Set TCP socket to non-blocking mode
 
     # Loop to receive each gradient
     for grad_idx in range(num_subgradients):
         if config.DEBUG:
-            print(f"\n--- RECEIVER: Starting reception for gradient {grad_idx + 1}/{num_subgradients} ---")
+            print(f"\n---[WORKER {tcp_addr}] RECEIVER: Starting reception for gradient {grad_idx + 1}/{num_subgradients} ---")
 
+        # readable, _, _ = select.select([tcp_sock], [], [], 1.0)
+
+        # if tcp_sock in readable:
         # --- Receive Metadata for one gradient ---
         # 1. key deserialization
         # 1.1. receive the length of packed value and UNPACK it
-        packed_key_len = _recv_all(tcp_sock, 4)
+        packed_key_len = _recv_all(tcp_sock, 4, recv_lock) if recv_lock else _recv_all(tcp_sock, 4)
         if not packed_key_len:
             return None
         key_len = struct.unpack("!I", packed_key_len)[0]
 
         # 1.2. receive the actual value and DECODE it
-        key_bytes = _recv_all(tcp_sock, key_len)
+        key_bytes = _recv_all(tcp_sock, key_len, recv_lock) if recv_lock else _recv_all(tcp_sock, key_len)
         if not key_bytes:
             return None
         key_str = key_bytes.decode("utf-8")
@@ -364,18 +435,18 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
 
         # --------------------------------------------------------------------------------------------------------------------------
         if config.DEBUG:
-            print(f"RECEIVER TCP: Received key length {key_len} bytes")
+            print(f"[Worker {tcp_addr}] RECEIVER TCP: Received key length {key_len} bytes")
         # ----------------------------------------------------------------------------------------------------------------------------
 
         # 2. dtype string deserialization
         # 2.1. ...
-        packed_dtype_str_len = _recv_all(tcp_sock, 4)
+        packed_dtype_str_len = _recv_all(tcp_sock, 4, recv_lock) if recv_lock else _recv_all(tcp_sock, 4)
         if not packed_dtype_str_len:
             return None
         dtype_str_len = struct.unpack("!I", packed_dtype_str_len)[0]
 
         # 2.2. ...
-        dtype_str_bytes = _recv_all(tcp_sock, dtype_str_len)
+        dtype_str_bytes = _recv_all(tcp_sock, dtype_str_len, recv_lock) if recv_lock else _recv_all(tcp_sock, dtype_str_len)
         if not dtype_str_bytes:
             return None
         dtype_str = dtype_str_bytes.decode("utf-8")
@@ -387,12 +458,12 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
 
         # --------------------------------------------------------------------------------------------------------------------------
         if config.DEBUG:
-            print(f"RECEIVER TCP: Received dtype {dtype_str} (length {dtype_str_len})")
+            print(f"[Worker {tcp_addr}] RECEIVER TCP: Received dtype {dtype_str} (length {dtype_str_len})")
         # ----------------------------------------------------------------------------------------------------------------------------
 
         # 3. shape deserialization
         # 3.1
-        packed_num_dimensions = _recv_all(tcp_sock, 4)
+        packed_num_dimensions = _recv_all(tcp_sock, 4, recv_lock) if recv_lock else _recv_all(tcp_sock, 4)
         if not packed_num_dimensions:
             return None
         num_dimensions = struct.unpack("!I", packed_num_dimensions)[0]
@@ -400,7 +471,7 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
         shape_list = []
         shape_read_success = True
         for i in range(num_dimensions):
-            packed_dim_size_bytes = _recv_all(tcp_sock, 4)
+            packed_dim_size_bytes = _recv_all(tcp_sock, 4, recv_lock) if recv_lock else _recv_all(tcp_sock, 4)
             if not packed_dim_size_bytes:
                 shape_read_success = False
                 break
@@ -412,30 +483,41 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
 
         # --------------------------------------------------------------------------------------------------------------------------
         if config.DEBUG:
-            print(f"RECEIVER TCP: Received shape {shape_tuple} (num_dimensions={num_dimensions})")
+            print(f"[Worker {tcp_addr}] RECEIVER TCP: Received shape {shape_tuple} (num_dimensions={num_dimensions})")
         # ----------------------------------------------------------------------------------------------------------------------------
 
         # 4. tensor data length deserialization
-        packed_tensor_data_len = _recv_all(tcp_sock, 4)
+        packed_tensor_data_len = _recv_all(tcp_sock, 4, recv_lock) if recv_lock else _recv_all(tcp_sock, 4)
         if not packed_tensor_data_len:
             return None
         tensor_data_len_expected = struct.unpack("!I", packed_tensor_data_len)[0]
 
         if config.DEBUG:
-            print(f"RECEIVER TCP: Expected tensor data length {tensor_data_len_expected} bytes")
+            print(f"[Worker {tcp_addr}] RECEIVER TCP: Expected tensor data length {tensor_data_len_expected} bytes")
 
         if config.DEBUG:
-            print(f"RECEIVER TCP: Metadata OK for key='{key_str}', shape={shape_tuple}, expected_data_len={tensor_data_len_expected}")
+            print(
+                f"[Worker {tcp_addr}] RECEIVER TCP: Metadata OK for key='{key_str}', shape={shape_tuple}, expected_data_len={tensor_data_len_expected}"
+            )
+
+        # # after receiving all the metadata, need to send a TCP ACK
+        # try:
+        #     tcp_sock.sendall(b"A")  # Acknowledge receipt of metadata
+        #     if config.DEBUG:
+        #         print(f"[Worker {tcp_addr}] RECEIVER TCP: Sent ACK for metadata of key='{key_str}'.")
+        # except Exception as e:
+        #     print(f"[Worker {tcp_addr}] RECEIVER TCP ERROR: Failed to send ACK for metadata of key='{key_str}': {e}")
+        #     return None
 
         # 5. Prepare to receive the tensor data
         #  UDP WILL START SOON
         # --- Receive Tensor Chunks via MLT ---
-        num_chunks_bytes = _recv_all(tcp_sock, 4)
+        num_chunks_bytes = _recv_all(tcp_sock, 4, recv_lock) if recv_lock else _recv_all(tcp_sock, 4)
         if not num_chunks_bytes:
             return None
         total_chunks = struct.unpack("!I", num_chunks_bytes)[0]
         if config.DEBUG:
-            print(f"RECEIVER MLT(TCP): Expecting {total_chunks} chunks for '{key_str}'.")
+            print(f"[Worker {tcp_addr}] RECEIVER MLT(TCP): Expecting {total_chunks} chunks for '{key_str}'.")
 
         received_chunks = [None] * total_chunks
         bitmap = bytearray((total_chunks + 7) // 8)
@@ -455,9 +537,9 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
                 if udp_sock in readable:
                     packet, udp_addr = udp_sock.recvfrom(expected_packet_size + 100)
                     if config.DEBUG:
-                        print(f"RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes.")
+                        print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes.")
                     if len(packet) < 12:
-                        print(f"RECEIVER MLT(UDP): Packet too small: {len(packet)} bytes. Ignoring.")
+                        print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Packet too small: {len(packet)} bytes. Ignoring.")
                         continue
                     seq, _, chunk_len_in_header = struct.unpack("!III", packet[:12])
                     if seq < total_chunks and received_chunks[seq] is None and len(packet[12:]) == chunk_len_in_header:
@@ -471,13 +553,13 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
                     if total_chunks > 0 and (received_chunks.count(None) / total_chunks) <= config.loss_tolerance:
                         if config.DEBUG:
                             print("RECEIVER MLT: sending early stop signal before probing.")
-                            print(f"RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
+                            print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
                         has_stopped = True
                         tcp_sock.sendall(b"S")
                         break
 
                 if tcp_sock in readable:
-                    signal = _recv_all(tcp_sock, 1)
+                    signal = _recv_all(tcp_sock, 1, recv_lock) if recv_lock else _recv_all(tcp_sock, 1)
                     # STOP signal can be sent after receiving PROBE (P)
                     # need to make sure STOP signals are not sent twice
                     # after receiving PROBE (P)
@@ -487,13 +569,13 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
                         # Early termination logic OR all chunks are received
                         if total_chunks > 0 and (received_chunks.count(None) / total_chunks) <= config.loss_tolerance:
                             if config.DEBUG:
-                                print(f"RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
+                                print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
                             has_stopped = True
                             tcp_sock.sendall(b"S")
                             break
                         else:
                             if config.DEBUG:
-                                print(f"RECEIVER MLT: Sending 'Bitmap' (B) {bitmap}")
+                                print(f"[Worker {tcp_addr}] RECEIVER MLT: Sending 'Bitmap' (B) {bitmap}")
                             tcp_sock.sendall(b"B")
                             tcp_sock.sendall(bitmap)
                     elif not signal:
@@ -501,7 +583,7 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
             except (socket.timeout, ConnectionError):
                 break
             except Exception as e:
-                print(f"RECEIVER MLT ERROR: An unexpected error occurred: {e}")
+                print(f"[Worker {tcp_addr}] RECEIVER MLT ERROR: An unexpected error occurred: {e}")
                 traceback.print_exc()
                 break
 
@@ -529,12 +611,12 @@ def recv_data_mlt(socks: dict) -> tuple[dict | None, tuple] | None:
             if chunk:
                 # If we have the chunk, ensure it's not longer than expected
                 if expected_chunk_size != config.CHUNK_SIZE:
-                    print(f"RECEIVER MLT: Chunk size {expected_chunk_size} is less than normal {config.CHUNK_SIZE}")
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk size {expected_chunk_size} is less than normal {config.CHUNK_SIZE}")
                 final_data_list.append(chunk[:expected_chunk_size])
             else:
                 # If chunk is missing, append zeros of the *correct* size
                 if config.DEBUG:
-                    print(f"RECEIVER MLT: Zero-filling missing chunk #{i} with {expected_chunk_size} bytes.")
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT: Zero-filling missing chunk #{i} with {expected_chunk_size} bytes.")
                     print("RECEIVER MLT: It might not be missing; could be the case of meeting loss tolerance threshold")
                 final_data_list.append(b"\x00" * expected_chunk_size)
 
