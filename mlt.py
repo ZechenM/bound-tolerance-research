@@ -112,6 +112,8 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
     # 1. Key serialization
     key_bytes = key.encode("utf-8")
     # !I is unsigned int, 4 bytes
+    # !Q is unsigned long long, 8 bytes
+    # !i is signed int, 4 bytes
     packed_key_len = struct.pack("!I", len(key_bytes))
 
     try:
@@ -311,13 +313,13 @@ def send_data_mlt(socks: dict, addrs: dict, gradient_payload_bytes: bytes) -> bo
             probe_response_timeout = 3.0  # seconds
             ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
 
-            if not ready_to_read:
-                print(f"SENDER MLT: Timeout ({probe_response_timeout}s) waiting for server response to 'Probe'.")
-                no_progress_rounds += 1
-                if no_progress_rounds >= max_retries_no_progress:
-                    print("SENDER MLT: Max retries with no progress reached. Aborting.")
-                    return False
-                continue  # Retry by sending probe again after resending unacked chunks
+            # if not ready_to_read:
+            #     print(f"SENDER MLT: Timeout ({probe_response_timeout}s) waiting for server response to 'Probe'.")
+            #     no_progress_rounds += 1
+            #     if no_progress_rounds >= max_retries_no_progress:
+            #         print("SENDER MLT: Max retries with no progress reached. Aborting.")
+            #         return False
+            #     continue  # Retry by sending probe again after resending unacked chunks
 
             signal = _recv_all(tcp_sock, 1)
             if not signal:
@@ -424,6 +426,9 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | 
             return None
         key_len = struct.unpack("!I", packed_key_len)[0]
 
+        if config.DEBUG:
+            print(f"[Worker {tcp_addr}] RECEIVER TCP: Received key length {key_len} bytes")
+
         # 1.2. receive the actual value and DECODE it
         key_bytes = _recv_all(tcp_sock, key_len, recv_lock) if recv_lock else _recv_all(tcp_sock, key_len)
         if not key_bytes:
@@ -435,7 +440,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | 
 
         # --------------------------------------------------------------------------------------------------------------------------
         if config.DEBUG:
-            print(f"[Worker {tcp_addr}] RECEIVER TCP: Received key length {key_len} bytes")
+            print(f"[Worker {tcp_addr}] RECEIVER TCP: Received key {key_str}: {key_bytes} bytes")
         # ----------------------------------------------------------------------------------------------------------------------------
 
         # 2. dtype string deserialization

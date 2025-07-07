@@ -63,7 +63,7 @@ class Server:
         Binds the main TCP listening port and starts accepting connections.
         """
         self.tcp_server.bind((self.host, self.tcp_port))
-        self.tcp_server.listen(self.num_workers)
+        self.tcp_server.listen()
         print(f"Server listening on {self.host}:{self.tcp_port} for {self.num_workers} workers")
 
         aggregator_thread = threading.Thread(target=self.gradient_aggregator_loop)
