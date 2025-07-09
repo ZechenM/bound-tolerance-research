@@ -64,7 +64,7 @@ class Server:
         """
         self.tcp_server.bind((self.host, self.tcp_port))
         self.tcp_server.listen()
-        print(f"Server listening on {self.host}:{self.tcp_port} for {self.num_workers} workers")
+        print(f"Server listening on {self.host}:{self.tcp_port}")
 
         aggregator_thread = threading.Thread(target=self.gradient_aggregator_loop)
         aggregator_thread.daemon = True

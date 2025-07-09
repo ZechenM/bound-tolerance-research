@@ -296,22 +296,22 @@ def send_data_mlt(socks: dict, addrs: dict, gradient_payload_bytes: bytes) -> bo
                         print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round")
                     return True
 
-            # --- Phase 3: Send "Probe" (P) signal via TCP ---
-            # Send 'Probe' (P) and wait for 'Stop' (S) or 'Bitmap' (B)
-            if config.DEBUG:
-                print("SENDER MLT: Sending 'Probe' (P) via TCP.")
-            try:
-                tcp_sock.sendall(b"P")
-            except Exception as e:
-                raise ConnectionError(f"SENDER MLT ERROR: Failed to send 'Probe' (P) signal: {e}")
+            # # --- Phase 3: Send "Probe" (P) signal via TCP ---
+            # # Send 'Probe' (P) and wait for 'Stop' (S) or 'Bitmap' (B)
+            # if config.DEBUG:
+            #     print("SENDER MLT: Sending 'Probe' (P) via TCP.")
+            # try:
+            #     tcp_sock.sendall(b"P")
+            # except Exception as e:
+            #     raise ConnectionError(f"SENDER MLT ERROR: Failed to send 'Probe' (P) signal: {e}")
 
             #  --- Phase 4: Receive server's response (S or B + bitmap) ---
-            if config.DEBUG:
-                print("SENDER MLT: Waiting for server response after 'Probe' (P).")
+            # if config.DEBUG:
+            #     print("SENDER MLT: Waiting for server response after 'Probe' (P).")
 
             # Use select with a reasonable timeout for the server to respond
-            probe_response_timeout = 3.0  # seconds
-            ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
+            # probe_response_timeout = 3.0  # seconds
+            # ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
 
             # if not ready_to_read:
             #     print(f"SENDER MLT: Timeout ({probe_response_timeout}s) waiting for server response to 'Probe'.")
