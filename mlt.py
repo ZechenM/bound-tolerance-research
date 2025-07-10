@@ -26,6 +26,28 @@ from config import STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE, TORCH_DTYPE_TO_STR, T
 #             raise RuntimeError(f"Error on attempt {attempt}: {e}")
 #     return None
 
+# TODO: timeout might also be 0.001 or 0.01 if we don't wany to stall the program that much
+def _flush_recv_buffer(sock: socket.socket, timeout=0.1):
+    all_data = b""
+    
+    while True:
+        ready_to_read, _, _ = select.select([sock], [], [], timeout)
+        if not ready_to_read:
+            break
+        
+        try:
+            data = sock.recv(1024)
+            if not data:
+                print("Connection closed by the sender.")
+                break
+            all_data += data
+        except socket.error as e:
+            print(f"Error while flushing receive buffer: {e}")
+            break
+
+    return all_data
+
+
 
 def _recv_all(conn: socket.socket, size: int, recv_lock=None) -> bytes | None:
     """Helper function to reliably receive exactly num_bytes from a TCP socket."""
@@ -63,6 +85,7 @@ def _chunk_data(data_bytes: bytes) -> list[bytes]:
     return [data_bytes[i : i + config.CHUNK_SIZE] for i in range(0, len(data_bytes), config.CHUNK_SIZE)]
 
 
+# TODO maybe change the 0.001 to 0.01 or 0.1, that might solve the extra probing issue
 def _check_if_told_to_stop(sock: socket.socket, timeout: float = 0.001) -> bool:
     """
     Polls a socket to check if it is ready for reading.
@@ -560,6 +583,12 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | 
                             print("RECEIVER MLT: sending early stop signal before probing.")
                             print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
                         has_stopped = True
+
+                        # flush the tcp receive buffer to avoid any stale data
+                        data = _flush_recv_buffer(tcp_sock, timeout=0.1)
+                        if config.DEBUG and data:
+                            print(f"[Worker {tcp_addr}] RECEIVER MLT: Flushed TCP buffer right before STOP signal sent out and got: {data}")
+                        # send the stop signal
                         tcp_sock.sendall(b"S")
                         break
 
@@ -576,6 +605,12 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | 
                             if config.DEBUG:
                                 print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
                             has_stopped = True
+                            
+                            # flush the tcp receive buffer to avoid any stale data
+                            data = _flush_recv_buffer(tcp_sock, timeout=0.1)
+                            if config.DEBUG and data:
+                                print(f"[Worker {tcp_addr}] RECEIVER MLT: Flushed TCP buffer right before STOP signal sent out and got: {data}")
+                            # send the stop signal
                             tcp_sock.sendall(b"S")
                             break
                         else:
@@ -597,6 +632,12 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | 
             if config.DEBUG:
                 print("RECEIVER MLT: Got out of chunk send/recv loop but had not sent STOP (S) signal")
                 print(f"    Sending it right now for '{key_str}'")
+            
+            # flush the tcp receive buffer to avoid any stale data
+            data = _flush_recv_buffer(tcp_sock, timeout=0.1)
+            if config.DEBUG and data:
+                print(f"[Worker {tcp_addr}] RECEIVER MLT: Flushed TCP buffer right before STOP signal sent out and got: {data}")
+            # send the stop signal
             tcp_sock.sendall(b"S")
 
         udp_sock.settimeout(original_udp_timeout)

@@ -14,7 +14,7 @@ import torch
 
 
 # config 2: debug mode
-DEBUG = 1
+DEBUG = 0
 
 
 # config 3: model
@@ -27,7 +27,7 @@ protocol = ["TCP", "MLT"][1]
 
 # config 6: bounded-loss tolerance
 loss_tolerance = 0
-CHUNK_SIZE = 1024
+CHUNK_SIZE = 8192  # Size of each chunk to send over the network, in bytes
 
 # config 7: Mappings for Dtypes
 # These mappings help convert between torch.dtype, its string representation,
