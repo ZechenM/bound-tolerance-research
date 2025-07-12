@@ -90,6 +90,8 @@ class Server:
         """A loop that waits for all gradients, aggregates them, and signals workers to send."""
         while self.running:
             with self.is_buffer_full:
+                self.aggregation_complete_event.clear()  # Reset the event for the next round
+
                 while len(self.received_gradients) < self.num_workers:
                     print(f"[Aggregator] Waiting... ({len(self.received_gradients)}/{self.num_workers} gradients received)")
                     self.is_buffer_full.wait()
@@ -154,10 +156,8 @@ class Server:
                         print(f"[{tcp_addr}] Added gradients to buffer ({len(self.received_gradients)}/{self.num_workers}).")
                         if len(self.received_gradients) == self.num_workers:
                             print(f"[{tcp_addr}] Final gradient received. Notifying aggregator.")
-                            self.aggregation_complete_event.clear()  # Clear event from previous round
                             self.is_buffer_full.notify()
 
-                # ---------- memory barrier --------------------------
 
                 # ---------- logic for training phase update BEGINS ---------
                 if self.has_eval_acc:
@@ -178,6 +178,7 @@ class Server:
                 # --- ROUND-TRIP LOGIC: Wait for aggregation and send back ---
                 print(f"[{tcp_addr}] Waiting for aggregation to complete...")
                 self.aggregation_complete_event.wait()  # Wait until aggregator sets the event
+                # ---------- memory barrier --------------------------
 
                 print(f"[{tcp_addr}] Aggregation complete. Sending averaged gradients back.")
 

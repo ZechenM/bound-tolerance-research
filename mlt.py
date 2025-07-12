@@ -149,34 +149,34 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
         print(f"Serializing key: {key} (length: {len(key_bytes)})")
         print("SENDER TCP: Sent packed_key_len and key in bytes")
 
-    # 2. Dtype string serialization
-    dtype_str = TORCH_DTYPE_TO_STR.get(tensor.dtype)
-    if not dtype_str:
-        if config.DEBUG:
-            print(f"Warning: Unsupported tensor dtype {tensor.dtype} for serialization. Attempting fallback.")
-        # Fallback for dtypes not explicitly in TORCH_DTYPE_TO_STR (e.g. bfloat16 if user adds it)
-        # This is a basic fallback; for robust handling of unlisted types, more logic is needed.
-        dtype_str = str(tensor.dtype)
-        # Consider adding it to STR_TO_TORCH_DTYPE dynamically or raising error if not found later
-        if dtype_str not in STR_TO_TORCH_DTYPE:
-            STR_TO_TORCH_DTYPE[dtype_str] = tensor.dtype  #  Attempt dynamic addition
-        if tensor.dtype not in TORCH_TO_NUMPY_DTYPE:
-            # This would be an issue for deserialization if no numpy equivalent is known
-            raise ValueError(f"Unsupported tensor dtype for serialization: {tensor.dtype}. No NumPy equivalent mapped.")
+    # # 2. Dtype string serialization
+    # dtype_str = TORCH_DTYPE_TO_STR.get(tensor.dtype)
+    # if not dtype_str:
+    #     if config.DEBUG:
+    #         print(f"Warning: Unsupported tensor dtype {tensor.dtype} for serialization. Attempting fallback.")
+    #     # Fallback for dtypes not explicitly in TORCH_DTYPE_TO_STR (e.g. bfloat16 if user adds it)
+    #     # This is a basic fallback; for robust handling of unlisted types, more logic is needed.
+    #     dtype_str = str(tensor.dtype)
+    #     # Consider adding it to STR_TO_TORCH_DTYPE dynamically or raising error if not found later
+    #     if dtype_str not in STR_TO_TORCH_DTYPE:
+    #         STR_TO_TORCH_DTYPE[dtype_str] = tensor.dtype  #  Attempt dynamic addition
+    #     if tensor.dtype not in TORCH_TO_NUMPY_DTYPE:
+    #         # This would be an issue for deserialization if no numpy equivalent is known
+    #         raise ValueError(f"Unsupported tensor dtype for serialization: {tensor.dtype}. No NumPy equivalent mapped.")
 
-    dtype_str_bytes = dtype_str.encode("utf-8")
-    # !H is unsigned short, 2 bytes
-    packed_dtype_str_len = struct.pack("!I", len(dtype_str_bytes))
+    # dtype_str_bytes = dtype_str.encode("utf-8")
+    # # !H is unsigned short, 2 bytes
+    # packed_dtype_str_len = struct.pack("!I", len(dtype_str_bytes))
 
-    try:
-        tcp_sock.sendall(packed_dtype_str_len)  # Send dtype string length first
-        tcp_sock.sendall(dtype_str_bytes)  # Then send the dtype string bytes
-    except Exception as e:
-        raise ConnectionError(f"tcp sock connection error: {e}")
+    # try:
+    #     tcp_sock.sendall(packed_dtype_str_len)  # Send dtype string length first
+    #     tcp_sock.sendall(dtype_str_bytes)  # Then send the dtype string bytes
+    # except Exception as e:
+    #     raise ConnectionError(f"tcp sock connection error: {e}")
 
-    if config.DEBUG:
-        print(f"Serializing dtype: {dtype_str} (length: {len(dtype_str_bytes)})")
-        print("SENDER TCP: Sent packed_dtype_str_len and dtype_str in bytes")
+    # if config.DEBUG:
+    #     print(f"Serializing dtype: {dtype_str} (length: {len(dtype_str_bytes)})")
+    #     print("SENDER TCP: Sent packed_dtype_str_len and dtype_str in bytes")
 
     # 3. Shape serialization
     shape = tensor.shape
@@ -466,28 +466,29 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | 
             print(f"[Worker {tcp_addr}] RECEIVER TCP: Received key {key_str}: {key_bytes} bytes")
         # ----------------------------------------------------------------------------------------------------------------------------
 
-        # 2. dtype string deserialization
-        # 2.1. ...
-        packed_dtype_str_len = _recv_all(tcp_sock, 4, recv_lock) if recv_lock else _recv_all(tcp_sock, 4)
-        if not packed_dtype_str_len:
-            return None
-        dtype_str_len = struct.unpack("!I", packed_dtype_str_len)[0]
+        # # 2. dtype string deserialization
+        # # 2.1. ...
+        # packed_dtype_str_len = _recv_all(tcp_sock, 4, recv_lock) if recv_lock else _recv_all(tcp_sock, 4)
+        # if not packed_dtype_str_len:
+        #     return None
+        # dtype_str_len = struct.unpack("!I", packed_dtype_str_len)[0]
 
-        # 2.2. ...
-        dtype_str_bytes = _recv_all(tcp_sock, dtype_str_len, recv_lock) if recv_lock else _recv_all(tcp_sock, dtype_str_len)
-        if not dtype_str_bytes:
-            return None
-        dtype_str = dtype_str_bytes.decode("utf-8")
+        # # 2.2. ...
+        # dtype_str_bytes = _recv_all(tcp_sock, dtype_str_len, recv_lock) if recv_lock else _recv_all(tcp_sock, dtype_str_len)
+        # if not dtype_str_bytes:
+        #     return None
+        # dtype_str = dtype_str_bytes.decode("utf-8")
+        dtype_str = "torch.float32" 
 
         torch_dtype = STR_TO_TORCH_DTYPE.get(dtype_str, None)
         numpy_dtype = STR_TO_NUMPY_DTYPE.get(dtype_str, None)
         if not torch_dtype or not numpy_dtype:
             raise ValueError(f"Unsupported dtype: {dtype_str}")
 
-        # --------------------------------------------------------------------------------------------------------------------------
-        if config.DEBUG:
-            print(f"[Worker {tcp_addr}] RECEIVER TCP: Received dtype {dtype_str} (length {dtype_str_len})")
-        # ----------------------------------------------------------------------------------------------------------------------------
+        # # --------------------------------------------------------------------------------------------------------------------------
+        # if config.DEBUG:
+        #     print(f"[Worker {tcp_addr}] RECEIVER TCP: Received dtype {dtype_str} (length {dtype_str_len})")
+        # # ----------------------------------------------------------------------------------------------------------------------------
 
         # 3. shape deserialization
         # 3.1

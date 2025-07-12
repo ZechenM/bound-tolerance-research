@@ -14,7 +14,7 @@ import torch
 
 
 # config 2: debug mode
-DEBUG = 0
+DEBUG = 1
 
 
 # config 3: model

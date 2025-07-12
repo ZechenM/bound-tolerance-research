@@ -229,14 +229,14 @@ class DistributedTrainerMultithreading(Trainer):
 
                 success = mlt.send_data_mlt(socks, addrs, payload_bytes)
 
-                while not success:
-                    gradients_round += 1
-                    if gradients_round > 10:
-                        raise ValueError(f"[Worker {self.id}] Failed to transmit data for key '{key}' after 10 attempts. Shutting down.")
-                    print(f"[Worker {self.id}] Failed to transmit data for key '{key}' for {gradients_round} time.")
-                    success = mlt.send_data_mlt(socks, addrs, payload_bytes)
+                # while not success:
+                #     gradients_round += 1
+                #     if gradients_round > 10:
+                #         raise ValueError(f"[Worker {self.id}] Failed to transmit data for key '{key}' after 10 attempts. Shutting down.")
+                #     print(f"[Worker {self.id}] Failed to transmit data for key '{key}' for {gradients_round} time.")
+                #     success = mlt.send_data_mlt(socks, addrs, payload_bytes)
 
-                print(f"Out of success while loop, value of success: {success}")
+                # print(f"Out of success while loop, value of success: {success}")
                 print(f"[Worker {self.id}] Successfully completed transmission for key '{key}'.")
 
         print(f"[Worker {self.id}] Finished sending gradients.")
