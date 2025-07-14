@@ -205,8 +205,6 @@ class DistributedTrainerMultithreading(Trainer):
             print(f"[Worker {self.id}] Not connected. Cannot send gradients.")
             return
 
-        gradients_round = 0
-
         print(f"[Worker {self.id}] Starting to send {len(gradients_dict)} gradients...")
 
         if self.sent_eval:
@@ -221,22 +219,16 @@ class DistributedTrainerMultithreading(Trainer):
         self.tcp_sock.sendall(struct.pack("!I", len(gradients_dict)))
 
         for key, tensor in gradients_dict.items():
-            payload_bytes = mlt.serialize_gradient_to_custom_binary(self.tcp_sock, key, tensor)
+            metadata, payload_bytes = mlt.serialize_gradient_to_custom_binary(self.tcp_sock, key, tensor)
             if payload_bytes is not None:
                 socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
                 addrs = {"udp": (self.server_host, self.dedicated_server_udp_port)}
                 addrs["tcp"] = (self.server_host, self.tcp_port)
 
-                success = mlt.send_data_mlt(socks, addrs, payload_bytes)
+                success = mlt.send_data_mlt(socks, addrs, metadata, payload_bytes)
 
-                # while not success:
-                #     gradients_round += 1
-                #     if gradients_round > 10:
-                #         raise ValueError(f"[Worker {self.id}] Failed to transmit data for key '{key}' after 10 attempts. Shutting down.")
-                #     print(f"[Worker {self.id}] Failed to transmit data for key '{key}' for {gradients_round} time.")
-                #     success = mlt.send_data_mlt(socks, addrs, payload_bytes)
-
-                # print(f"Out of success while loop, value of success: {success}")
+                if not success:
+                    raise ValueError(f"[Worker {self.id}] Failed to transmit data for key '{key}'. Shutting down.")
                 print(f"[Worker {self.id}] Successfully completed transmission for key '{key}'.")
 
         print(f"[Worker {self.id}] Finished sending gradients.")

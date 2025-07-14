@@ -218,12 +218,12 @@ class Server:
                 print(f"    Value is likely eval data: {tensor}")
                 continue
 
-            payload_bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)
+            metadata, payload_bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)
             if payload_bytes is None:
                 print(f"Failed to serialize tensor data for key '{key}'. Skipping.")
                 continue
 
-            success = mlt.send_data_mlt(socks, addrs, payload_bytes)
+            success = mlt.send_data_mlt(socks, addrs, metadata, payload_bytes)
             if not success:
                 raise ValueError(f"SERVER ERROR: Failed to send tensor data for key '{key}' using MLT. Aborting.")
             else:
