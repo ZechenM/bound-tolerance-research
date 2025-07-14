@@ -66,9 +66,6 @@ def _recv_all(conn: socket.socket, size: int, recv_lock=None) -> bytes | None:
             if not packet:
                 print("Connection closed by the sender.")
                 return None
-        # except socket.timeout:
-        #     print("Receive operation timed out.")
-        #     return None
         except Exception as e:
             print(f"Error receiving data: {e}")
             return None
@@ -215,32 +212,32 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: dict, gradient_payload_byt
                         print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round")
                     return True
 
-            # # --- Phase 3: Send "Probe" (P) signal via TCP ---
-            # # Send 'Probe' (P) and wait for 'Stop' (S) or 'Bitmap' (B)
-            # if config.DEBUG:
-            #     print("SENDER MLT: Sending 'Probe' (P) via TCP.")
-            # try:
-            #     tcp_sock.sendall(b"P")
-            # except Exception as e:
-            #     raise ConnectionError(f"SENDER MLT ERROR: Failed to send 'Probe' (P) signal: {e}")
+            # --- Phase 3: Send "Probe" (P) signal via TCP ---
+            # Send 'Probe' (P) and wait for 'Stop' (S) or 'Bitmap' (B)
+            if config.DEBUG:
+                print("SENDER MLT: Sending 'Probe' (P) via TCP.")
+            try:
+                tcp_sock.sendall(b"P")
+            except Exception as e:
+                raise ConnectionError(f"SENDER MLT ERROR: Failed to send 'Probe' (P) signal: {e}")
 
             #  --- Phase 4: Receive server's response (S or B + bitmap) ---
-            # if config.DEBUG:
-            #     print("SENDER MLT: Waiting for server response after 'Probe' (P).")
+            if config.DEBUG:
+                print("SENDER MLT: Waiting for server response after 'Probe' (P).")
 
             # Use select with a reasonable timeout for the server to respond
-            # probe_response_timeout = 3.0  # seconds
-            # ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
+            probe_response_timeout = 0.1  # seconds
+            ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
 
-            # if not ready_to_read:
-            #     print(f"SENDER MLT: Timeout ({probe_response_timeout}s) waiting for server response to 'Probe'.")
-            #     no_progress_rounds += 1
-            #     if no_progress_rounds >= max_retries_no_progress:
-            #         print("SENDER MLT: Max retries with no progress reached. Aborting.")
-            #         return False
-            #     continue  # Retry by sending probe again after resending unacked chunks
+            if not ready_to_read:
+                print(f"SENDER MLT: Timeout ({probe_response_timeout}s) waiting for server response to 'Probe'.")
+                no_progress_rounds += 1
+                if no_progress_rounds >= max_retries_no_progress:
+                    print("SENDER MLT: Max retries with no progress reached. Aborting.")
+                    return False
+                continue  # Retry by sending probe again after resending unacked chunks
 
-            signal = _recv_all(tcp_sock, 1)
+            signal = utility.recv_all(tcp_sock, 1)
             if not signal:
                 raise ConnectionError("SENDER MLT ERROR: Connection closed by receiver while waiting for response.")
 
@@ -251,7 +248,7 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: dict, gradient_payload_byt
                 print("SENDER MLT: Received 'Bitmap' (B) signal, receiving bitmap.")
 
                 bitmap_len_to_recv = len(server_ack_bitmap)
-                new_bitmap_data = _recv_all(tcp_sock, bitmap_len_to_recv)
+                new_bitmap_data = utility.recv_all(tcp_sock, bitmap_len_to_recv)
 
                 if not new_bitmap_data or len(new_bitmap_data) != bitmap_len_to_recv:
                     raise ConnectionError("SENDER MLT ERROR: Failed to receive complete bitmap data from server.")
@@ -418,10 +415,10 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | 
                             print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
                         has_stopped = True
 
-                        # flush the tcp receive buffer to avoid any stale data
-                        data = _flush_recv_buffer(tcp_sock, timeout=0.1)
-                        if config.DEBUG and data:
-                            print(f"[Worker {tcp_addr}] RECEIVER MLT: Flushed TCP buffer right before STOP signal sent out and got: {data}")
+                        # # flush the tcp receive buffer to avoid any stale data
+                        # data = _flush_recv_buffer(tcp_sock, timeout=0.1)
+                        # if config.DEBUG and data:
+                        #     print(f"[Worker {tcp_addr}] RECEIVER MLT: Flushed TCP buffer right before STOP signal sent out and got: {data}")
                         # send the stop signal
                         tcp_sock.sendall(b"S")
                         break
@@ -440,10 +437,10 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | 
                                 print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
                             has_stopped = True
                             
-                            # flush the tcp receive buffer to avoid any stale data
-                            data = _flush_recv_buffer(tcp_sock, timeout=0.1)
-                            if config.DEBUG and data:
-                                print(f"[Worker {tcp_addr}] RECEIVER MLT: Flushed TCP buffer right before STOP signal sent out and got: {data}")
+                            # # flush the tcp receive buffer to avoid any stale data
+                            # data = _flush_recv_buffer(tcp_sock, timeout=0.1)
+                            # if config.DEBUG and data:
+                            #     print(f"[Worker {tcp_addr}] RECEIVER MLT: Flushed TCP buffer right before STOP signal sent out and got: {data}")
                             # send the stop signal
                             tcp_sock.sendall(b"S")
                             break
@@ -467,10 +464,10 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | 
                 print("RECEIVER MLT: Got out of chunk send/recv loop but had not sent STOP (S) signal")
                 print(f"    Sending it right now for '{key}'")
             
-            # flush the tcp receive buffer to avoid any stale data
-            data = _flush_recv_buffer(tcp_sock, timeout=0.1)
-            if config.DEBUG and data:
-                print(f"[Worker {tcp_addr}] RECEIVER MLT: Flushed TCP buffer right before STOP signal sent out and got: {data}")
+            # # flush the tcp receive buffer to avoid any stale data
+            # data = _flush_recv_buffer(tcp_sock, timeout=0.1)
+            # if config.DEBUG and data:
+            #     print(f"[Worker {tcp_addr}] RECEIVER MLT: Flushed TCP buffer right before STOP signal sent out and got: {data}")
             # send the stop signal
             tcp_sock.sendall(b"S")
 
@@ -518,9 +515,9 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | 
 
             final_gradients_dict[key] = reconstructed_tensor
             if config.DEBUG:
-                print(f"RECONSTRUCTION: Success for key '{key}'.")
+                print(f"[Worker {tcp_addr}] RECONSTRUCTION: Success for key '{key}'.")
         except Exception as e:
-            print(f"RECONSTRUCTION ERROR for '{key}': {e}. Storing zeros.")
+            print(f"[Worker {tcp_addr}] RECONSTRUCTION ERROR for '{key}': {e}. Storing zeros.")
             final_gradients_dict[key] = torch.zeros(shape, dtype=torch_dtype)
 
     return final_gradients_dict, udp_addr
