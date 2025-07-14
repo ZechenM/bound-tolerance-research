@@ -3,7 +3,7 @@ import socket
 import struct
 import traceback
 import utility
-
+import pickle
 import numpy as np
 import torch
 
@@ -200,7 +200,7 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: dict, gradient_payload_byt
                     packet_to_send = header + chunk_payload
                     try:
                         udp_sock.sendto(
-                            packet_to_send,
+                            pickle.dumps(packet_to_send),
                             (udp_host, udp_port),
                         )
                         chunks_sent_this_round += 1
@@ -399,6 +399,10 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, recv_lock=None) -> tuple[dict | 
                     if len(packet) < 12:
                         print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Packet too small: {len(packet)} bytes. Ignoring.")
                         continue
+                    
+                    # Unpick the packet
+                    packet = pickle.loads(packet)
+
                     seq, _, chunk_len_in_header = struct.unpack("!III", packet[:12])
                     if seq < total_chunks and received_chunks[seq] is None and len(packet[12:]) == chunk_len_in_header:
                         received_chunks[seq] = packet[12:]
