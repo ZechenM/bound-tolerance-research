@@ -191,6 +191,6 @@ if __name__ == "__main__":
             mnist_train_test_split()
         case "cifar10":
             # Prepare CIFAR-10 data for EfficientNetB0 / DenseNet
-            prepare_cifar10_data(60000, 300)  # 300 samples per class
+            prepare_cifar10_data(60000, 600) # 300 samples per class
         case "cifar100":
             prepare_cifar100_data()

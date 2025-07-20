@@ -41,9 +41,12 @@ class Worker:
 
         # Set up device
         if torch.cuda.is_available():
+            # pass
+            # self.device = torch.device("cpu")
+            # print("CUDA is available but not used")
             self.device = torch.device("cuda")
             print(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
-            # print(f"CUDA version: {torch.version.cuda}")
+            print(f"CUDA version: {torch.version.cuda}")
         elif torch.backends.mps.is_available():
             self.device = torch.device("mps")
             print("Using MPS device")
@@ -190,9 +193,12 @@ def main():
     )
     args = parser.parse_args()
 
+    # 从环境变量读取服务器地址，如果没有设置则使用默认值
+    server_host = os.environ.get("SERVER_HOST", "127.0.0.1")
+    
     worker = Worker(
         worker_id=args.worker_id,
-        server_host="127.0.0.1",
+        server_host=server_host,
     )
     worker.train_worker()
 
