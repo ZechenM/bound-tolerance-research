@@ -33,12 +33,14 @@ class Server:
         self.worker_eval_acc = []
         self.worker_epochs = []
         self.worker_threads = []
+        self.has_eval_acc = {}  # Track if any worker has sent eval data
 
         self.num_workers = num_workers
         self.received_gradients = []
         self.aggregation_round = 0
 
         # multithreading setup
+        self.training_phase_lock = threading.Lock()
         self.lock = threading.Lock()
         self.recv_lock = threading.Lock()
         self.is_buffer_full = threading.Condition(self.lock)
@@ -110,7 +112,7 @@ class Server:
                     stacked_tensors = torch.stack([worker_grads[key] for worker_grads in all_gradients])
                     averaged_gradients[key] = torch.mean(stacked_tensors, dim=0)
 
-                print(f"[Aggregator] Averaging complete for keys: {gradient_keys}")
+                print("[Aggregator] Averaging complete for all keys")
 
                 # --- ROUND-TRIP LOGIC: Prepare for broadcast ---
                 self.averaged_gradients = averaged_gradients
@@ -124,7 +126,6 @@ class Server:
     def handle_worker(self, client_tcp_sock, tcp_addr):
         """Manages the full round-trip lifecycle for a single worker."""
         dedicated_udp_sock = None
-        self.has_eval_acc = False
 
         try:
             dedicated_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -136,10 +137,13 @@ class Server:
             socks = {"tcp": client_tcp_sock, "udp": dedicated_udp_sock}
             addrs = {"tcp": tcp_addr}
 
+            signal_counter = 0
+
             while self.running:
                 # 1. Receive gradients from the worker
                 print(f"[{tcp_addr}] Waiting to receive gradients from worker...")
-                result = mlt.recv_data_mlt(socks, tcp_addr, None)
+                result = mlt.recv_data_mlt(socks, tcp_addr, signal_counter, None)
+                signal_counter += 1  # Increment signal counter after receiving
 
                 if result is None:
                     break
@@ -148,8 +152,30 @@ class Server:
 
                 if gradients:
                     print(f"[{tcp_addr}] Received gradient bundle from {worker_udp_addr}.")
-                    if "epoch" in gradients:
-                        self.has_eval_acc = True
+                    if "epoch" in gradients and "eval_acc" in gradients:
+                        print(f"[{tcp_addr}] Received epoch data: {gradients['epoch']}")
+                        print(f"[{tcp_addr}] Received evaluation accuracy: {gradients['eval_acc']}")
+                        # ---------- logic for training phase update BEGINS ---------
+                        with self.training_phase_lock:
+                            self.worker_eval_acc.append(gradients["eval_acc"])
+                            self.worker_epochs.append(gradients["epoch"])
+                            self.has_eval_acc[worker_udp_addr] = True
+                            del gradients["eval_acc"]
+                            del gradients["epoch"]
+
+                            if all(self.has_eval_acc.values()):
+                                print(f"[{tcp_addr}] All workers have reported eval accuracy.")
+                                self._training_phase_update()
+                                
+                                if self.training_phase == TrainingPhase.BEGIN:
+                                    self.drop_rate = config.BEGIN_DROP
+                                elif self.training_phase == TrainingPhase.MID:
+                                    self.drop_rate = config.MID_DROP
+                                elif self.training_phase == TrainingPhase.FINAL:
+                                    self.drop_rate = config.FINAL_DROP
+                                
+                                print(f"[{tcp_addr}] Updated drop rate: {self.drop_rate}")
+                        # ---------- logic for training phase update ENDS -----------
 
                     with self.is_buffer_full:
                         self.received_gradients.append(gradients)
@@ -158,22 +184,6 @@ class Server:
                             print(f"[{tcp_addr}] Final gradient received. Notifying aggregator.")
                             self.is_buffer_full.notify()
 
-
-                # ---------- logic for training phase update BEGINS ---------
-                if self.has_eval_acc:
-                    self._training_phase_update()
-
-                if self.training_phase == TrainingPhase.BEGIN:
-                    self.drop_rate = config.BEGIN_DROP
-                elif self.training_phase == TrainingPhase.MID:
-                    self.drop_rate = config.MID_DROP
-                elif self.training_phase == TrainingPhase.FINAL:
-                    self.drop_rate = config.FINAL_DROP
-
-                if self.has_eval_acc:
-                    print(f"Current drop rate: {self.drop_rate}\n")
-
-                # ---------- logic for training phase update ENDS -----------
 
                 # --- ROUND-TRIP LOGIC: Wait for aggregation and send back ---
                 print(f"[{tcp_addr}] Waiting for aggregation to complete...")
@@ -185,7 +195,8 @@ class Server:
                 addrs["udp"] = worker_udp_addr
 
                 # Use a new function to SEND BACK the whole dictionary
-                self.send_gradient_dict(socks, addrs)
+                self.send_gradient_dict(socks, addrs, signal_counter)
+                signal_counter += 1  # Increment signal counter after sending
                 print(f"[{tcp_addr}] Finished sending averaged gradients. Ready for next round.")
                 # --- END ---
 
@@ -201,7 +212,7 @@ class Server:
             if dedicated_udp_sock:
                 dedicated_udp_sock.close()
 
-    def send_gradient_dict(self, socks, addrs):
+    def send_gradient_dict(self, socks, addrs, signal_counter):
         """Sends a complete dictionary of gradients to a worker."""
         avg_gradients = self.averaged_gradients
         tcp_sock = socks["tcp"]
@@ -210,8 +221,16 @@ class Server:
         tcp_sock.sendall(b"N")
 
         num_subgradients = len(avg_gradients) - 2 if "epoch" in avg_gradients else len(avg_gradients)
+        if num_subgradients != len(avg_gradients):
+            raise ValueError(
+                f"num_subgradients:{num_subgradients}, len(avg_gradients):{len(avg_gradients)} mismatch.\n"
+                f"This should not happen because epoch and eval_acc has been deleted by me"
+            )
         tcp_sock.sendall(struct.pack("!I", num_subgradients))
 
+        metadata_list = []
+        payload_bytes_list = []
+        
         for key, tensor in avg_gradients.items():
             if not isinstance(tensor, torch.Tensor):
                 print(f"Warning: Item with key '{key}' is not a tensor, skipping.")
@@ -219,15 +238,20 @@ class Server:
                 continue
 
             metadata, payload_bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)
-            if payload_bytes is None:
-                print(f"Failed to serialize tensor data for key '{key}'. Skipping.")
-                continue
-
-            success = mlt.send_data_mlt(socks, addrs, metadata, payload_bytes)
-            if not success:
-                raise ValueError(f"SERVER ERROR: Failed to send tensor data for key '{key}' using MLT. Aborting.")
-            else:
-                print(f"\n--- SERVER successfully sent all the tensor data for key '{key}' ---\n")
+            if metadata is None or payload_bytes is None:
+                raise ValueError(
+                    f"Failed to serialize tensor data for key '{key}'. Either metadata or payload_bytes is None."
+                )
+            metadata_list.append(metadata)
+            payload_bytes_list.append(payload_bytes)
+            
+        # concatenate payload bytes into a single bytes object
+        all_payload_bytes = b''.join(payload_bytes_list)
+        success = mlt.send_data_mlt(socks, addrs, metadata_list, all_payload_bytes, signal_counter)
+        if not success:
+            raise ValueError(f"SERVER ERROR: Failed to send tensor data for key '{key}' using MLT. Aborting.")
+        else:
+            print(f"\n--- SERVER successfully sent all the tensor data for key '{key}' ---\n")
 
         print(f"\nFinished sending averaged gradients back to TCP: {addrs['tcp']} and UDP: {addrs['udp']}.")
 
@@ -244,7 +268,7 @@ class Server:
     # -------------- HELPER FUNCTIONS ---------------------------------------
     def _training_phase_update(self):
         if len(self.worker_eval_acc) < 3:
-            self.has_eval_acc = False
+            print("this should not happen. ABORTING.")
             return
 
         curr_avg_acc = sum(self.worker_eval_acc) / len(self.worker_eval_acc)
@@ -280,6 +304,7 @@ class Server:
 
         self.worker_eval_acc.clear()
         self.worker_epochs.clear()
+        self.has_eval_acc.clear()
 
 
 if __name__ == "__main__":

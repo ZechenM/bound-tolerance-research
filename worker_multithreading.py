@@ -4,6 +4,7 @@ import os
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torchvision.models as models
 from sklearn.metrics import accuracy_score
 from transformers import TrainingArguments
@@ -57,8 +58,10 @@ class Worker:
         # Load denseNet169 model
         # self.model = models.densenet169(weights=None)
         # Modify the model's classifier to output 10 classes (CIFAR10)
+        # ------------- denseNet 169 specific starts -------------
         # in_features = self.model.classifier.in_features
         # self.model.classifier = nn.Linear(in_features, 10)
+        # ------------- denseNet 169 specific ends -------------
         self.model = self.model.to(self.device)
         print(f"Model moved to {self.device}")
 

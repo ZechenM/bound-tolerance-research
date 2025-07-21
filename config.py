@@ -37,7 +37,6 @@ TORCH_DTYPE_TO_STR = {
     torch.float32: "torch.float32",
     torch.float64: "torch.float64",
     torch.float16: "torch.float16",
-    # torch.bfloat16: 'torch.bfloat16', # Needs special handling if required
     torch.complex32: "torch.complex32",  # Typically 2x float16, needs special handling
     torch.complex64: "torch.complex64",  # Typically 2x float32
     torch.complex128: "torch.complex128",  # Typically 2x float64
@@ -75,3 +74,6 @@ FINAL_DROP = 0.0
 
 # config 9: tcp max retries
 TCP_MAX_RETRIES = 3  # Maximum number of retries for TCP connections
+
+# config 10: timeout
+probe_response_timeout = 0.001 # Timeout for probe responses in seconds

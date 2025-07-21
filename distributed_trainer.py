@@ -1,7 +1,7 @@
 import pickle
 import socket
 import struct
-
+import time
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -162,7 +162,10 @@ class DistributedTrainer(Trainer):
             gradients["epoch"] = self.curr_epoch
 
         # Send gradients to server and receive averaged gradients
+        self.start_time = time.perf_counter()
         update, avg_gradients = self.send_recv(gradients)
+        self.end_time = time.perf_counter()
+        self.calc_network_latency(is_send=True)
         
         if not avg_gradients:
             raise ValueError(f"Worker {self.worker_id} failed to receive averaged gradients from server.")
@@ -220,8 +223,8 @@ class DistributedTrainer(Trainer):
         # This will still load the checkpoint state but won't skip training
         result = super().train(resume_from_checkpoint=resume_checkpoint, trial=trial, ignore_keys_for_eval=ignore_keys_for_eval)
 
-        # print(f"Worker {self.worker_id} training completed successfully")
-        # self.print_total_network_latency()
+        print(f"Worker {self.worker_id} training completed successfully")
+        self.print_total_network_latency()
 
         return result
 

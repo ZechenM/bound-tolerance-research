@@ -1,6 +1,6 @@
 import socket
 import struct
-
+import time
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -40,9 +40,35 @@ class DistributedTrainerMultithreading(Trainer):
         self.past_epoch = 0.0
         self.protocol = kwargs.pop("protocol", "MLT")
         self.loss_tolerance = kwargs.pop("loss_tolerance", 0.03)
+        self.signal_counter = 0  # Initialize signal counter for MLT protocol
+        
+        # network latency measurement
+        self.start_time = 0
+        self.end_time = 0
+        self.network_latency_list = []
 
         # Initialize parent class with remaining arguments
         super().__init__(*args, **kwargs)
+        
+    def calculate_network_latency(self):
+        """
+        Calculate the network latency based on the start and end times.
+        """
+
+        latency = (self.end_time - self.start_time)
+        self.network_latency_list.append(latency)
+        
+        print(f"[Worker {self.id}] (W->S->W) Network latency: {latency:.6f} seconds")
+    
+    def print_total_network_latency(self):
+        """
+        Print the total network latency for all operations.
+        """
+        if self.network_latency_list:
+            total_latency = sum(self.network_latency_list)
+            print(f"[Worker {self.id}] Total network latency: {total_latency:.6f} seconds")
+        else:
+            print(f"[Worker {self.id}] No network latency recorded.")
 
     def connect(self):
         """Establishes connection with the server and gets the dedicated UDP port."""
@@ -162,8 +188,11 @@ class DistributedTrainerMultithreading(Trainer):
             gradients["epoch"] = self.curr_epoch
 
         # --------------- 6/27 UPDATES: bring in MLT -------------------------------
+        self.start_time = time.perf_counter()  # Start measuring network latency
+        
         # 1. send local gradients
         self.send_gradients(gradients)
+        self.signal_counter += 1  # Increment signal counter after sending
 
         # 2. Wait to receive the globally averaged gradients from the server
 
@@ -173,8 +202,12 @@ class DistributedTrainerMultithreading(Trainer):
 
         print(f"[Worker {self.id}] Gradients sent. Waiting to receive averaged model back...")
         socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
-        result = mlt.recv_data_mlt(socks, (self.server_host, self.tcp_port))
+        result = mlt.recv_data_mlt(socks, (self.server_host, self.tcp_port), self.signal_counter)
+        self.signal_counter += 1  # Increment signal counter after receiving
 
+        self.end_time = time.perf_counter()
+        self.calculate_network_latency()
+        
         if result is None:
             raise ValueError(f"[Worker {self.id}] Server disconnected. Shutting down.")
 
@@ -217,20 +250,32 @@ class DistributedTrainerMultithreading(Trainer):
             print("WORKER: Sent 'no eval' signal 'N'.")
 
         self.tcp_sock.sendall(struct.pack("!I", len(gradients_dict)))
+        
+        # instead of sending each gradient one by one, we will send them all at once
+        # including the metadata
+        metadata_list: list[dict] = []
+        payload_bytes_list: list[bytes] = []
+
+        socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
+        addrs = {"udp": (self.server_host, self.dedicated_server_udp_port)}
+        addrs["tcp"] = (self.server_host, self.tcp_port)
 
         for key, tensor in gradients_dict.items():
             metadata, payload_bytes = mlt.serialize_gradient_to_custom_binary(self.tcp_sock, key, tensor)
-            if payload_bytes is not None:
-                socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
-                addrs = {"udp": (self.server_host, self.dedicated_server_udp_port)}
-                addrs["tcp"] = (self.server_host, self.tcp_port)
+            if metadata is None or payload_bytes is None:
+                raise ValueError(
+                    f"[Worker {self.id}] Failed to serialize tensor data for key '{key}'. Either metadata or payload_bytes is None."
+                )
+            metadata_list.append(metadata)
+            payload_bytes_list.append(payload_bytes)
+            
+        # concatenate payload bytes into a single bytes object
+        all_payload_bytes = b''.join(payload_bytes_list)
 
-                success = mlt.send_data_mlt(socks, addrs, metadata, payload_bytes)
-
-                if not success:
-                    raise ValueError(f"[Worker {self.id}] Failed to transmit data for key '{key}'. Shutting down.")
-                print(f"[Worker {self.id}] Successfully completed transmission for key '{key}'.")
-
+        success = mlt.send_data_mlt(socks, addrs, metadata_list, all_payload_bytes, self.signal_counter)
+        if not success:
+            raise ValueError(f"[Worker {self.id}] Failed to send tensor data using MLT protocol.")
+        
         print(f"[Worker {self.id}] Finished sending gradients.")
 
     def train(self, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None):
@@ -274,8 +319,8 @@ class DistributedTrainerMultithreading(Trainer):
             ignore_keys_for_eval=ignore_keys_for_eval,
         )
 
-        # print(f"Worker {self.id} training completed successfully")
-        # self.print_total_network_latency()
+        print(f"Worker {self.id} training completed successfully")
+        self.print_total_network_latency()
 
         return result
 

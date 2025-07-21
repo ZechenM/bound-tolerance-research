@@ -2,7 +2,7 @@ import pickle
 import struct
 
 
-def send_signal_tcp(sock, signal):    
+def send_signal_tcp(sock, signal, counter):    
     """
     Send a signal over a TCP socket.
     
@@ -12,7 +12,8 @@ def send_signal_tcp(sock, signal):
     if not isinstance(signal, bytes) or len(signal) != 1:
         raise ValueError("Signal must be a single byte.")
     try:
-        sock.sendall(signal)
+        signal_with_counter = struct.pack("!cI", signal, counter)
+        sock.sendall(signal_with_counter)
     except Exception as e:
         print(f"Error sending signal: {e}")
 
@@ -24,10 +25,14 @@ def recv_signal_tcp(sock):
     :return: The received signal as a single byte.
     """
     try:
-        signal = sock.recv(1)
-        if not signal:
-            raise ValueError("Socket connection closed before receiving signal.")
-        return signal
+        signal = sock.recv(5)  # 1 byte for signal + 4 bytes for counter
+        if len(signal) < 5:
+            raise ValueError("Received signal is incomplete.")
+        signal, counter = struct.unpack("!cI", signal)
+        if not isinstance(signal, bytes) or len(signal) != 1:
+            raise ValueError("Received signal is not a single byte.")
+
+        return signal, int(counter)
     except Exception as e:
         raise ValueError(f"Error receiving signal: {e}")
 

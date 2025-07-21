@@ -5,6 +5,7 @@ import sys
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torchvision.models as models
 from sklearn.metrics import accuracy_score
 from transformers import TrainingArguments
