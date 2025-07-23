@@ -10,6 +10,7 @@ from transformers import TrainingArguments
 
 import config
 from distributed_trainer_multithreading import DistributedTrainerMultithreading
+from distributed_trainer import DistributedTrainer
 from my_datasets import CIFAR10Dataset
 
 resume_from_checkpoint = False
@@ -149,32 +150,60 @@ class Worker:
         else:
             print("No checkpoint found. Starting training from scratch.")
 
-        trainer = DistributedTrainerMultithreading(
-            model=self.model,
-            args=self.training_args,
-            train_dataset=self.train_dataset,
-            eval_dataset=self.eval_dataset,
-            compute_metrics=self.compute_metrics,
-            server_host=self.server_host,
-            server_port=self.server_port,
-            worker_id=self.worker_id,
-            device=self.device,
-            protocol=config.protocol,
-            loss_tolerance=config.loss_tolerance,
-        )
+        # 根据协议类型选择合适的trainer
+        if config.protocol == "TCP":
+            print(f"Worker {self.worker_id} using TCP trainer")
+            trainer = DistributedTrainer(
+                model=self.model,
+                args=self.training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                compute_metrics=self.compute_metrics,
+                server_host=self.server_host,
+                server_port=self.server_port,
+                worker_id=self.worker_id,
+                device=self.device,
+                protocol=config.protocol,
+                loss_tolerance=config.loss_tolerance,
+            )
+        else:  # MLT
+            print(f"Worker {self.worker_id} using MLT trainer")
+            trainer = DistributedTrainerMultithreading(
+                model=self.model,
+                args=self.training_args,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                compute_metrics=self.compute_metrics,
+                server_host=self.server_host,
+                server_port=self.server_port,
+                worker_id=self.worker_id,
+                device=self.device,
+                protocol=config.protocol,
+                loss_tolerance=config.loss_tolerance,
+            )
 
         # Start training
         print(f"Worker {self.worker_id} starting training with evaluation...")
-        if resume_from_checkpoint:
-            print(f"Resuming training from checkpoint: {latest_checkpoint}")
-            if trainer.connect():
+        if config.protocol == "TCP":
+            # TCP trainer不需要connect/close，直接训练
+            if resume_from_checkpoint:
+                print(f"Resuming training from checkpoint: {latest_checkpoint}")
                 train_result = trainer.train(resume_from_checkpoint=latest_checkpoint)
-                trainer.close()
-        else:
-            print("Starting training from scratch")
-            if trainer.connect():
+            else:
+                print("Starting training from scratch")
                 train_result = trainer.train()
-                trainer.close()
+        else:  # MLT
+            # MLT trainer需要connect/close
+            if resume_from_checkpoint:
+                print(f"Resuming training from checkpoint: {latest_checkpoint}")
+                if trainer.connect():
+                    train_result = trainer.train(resume_from_checkpoint=latest_checkpoint)
+                    trainer.close()
+            else:
+                print("Starting training from scratch")
+                if trainer.connect():
+                    train_result = trainer.train()
+                    trainer.close()
 
         # Training completed
         print(f"Worker {self.worker_id} training DONE: {train_result}")

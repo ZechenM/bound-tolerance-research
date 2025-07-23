@@ -8,13 +8,30 @@ import sys
 from mininet.link import TCLink
 from mininet.log import info, setLogLevel, error
 from mininet.net import Mininet
-from mininet.node import OVSKernelSwitch, RemoteController
+from mininet.node import OVSBridge
 from mininet.topo import Topo
 from mininet.cli import CLI
 
-# 配置Python路径 - 根据实际环境调整
-PYTHON = "python3"
+# 配置Python路径 - WSL适配
+PYTHON = "python3"  # 在WSL中使用python3命令
 PROJECT_DIR = os.getcwd()  # 使用当前工作目录
+
+# 检测WSL环境
+def is_wsl():
+    """检测是否在WSL环境中运行"""
+    try:
+        with open('/proc/version', 'r') as f:
+            return 'microsoft' in f.read().lower() or 'wsl' in f.read().lower()
+    except:
+        return False
+
+# 获取虚拟环境Python路径
+def get_python_path():
+    """获取虚拟环境中的Python路径"""
+    venv_python = f"{PROJECT_DIR}/venv/bin/python3"
+    if os.path.exists(venv_python):
+        return venv_python
+    return PYTHON
 
 # 导入实验配置
 sys.path.append(PROJECT_DIR)
@@ -31,7 +48,7 @@ except ImportError:
 
 class MultithreadingTopo(Topo):
     """
-    多线程MLT协议测试拓扑:
+    多线程MLT协议测试拓扑 (WSL适配版):
     3个工作节点和1个服务器通过1个交换机连接
     网络配置为高速低延迟，避免网络成为瓶颈
     """
@@ -47,17 +64,23 @@ class MultithreadingTopo(Topo):
         worker1 = self.addHost("worker1")
         worker2 = self.addHost("worker2")
 
-        # 使用默认的OpenVSwitch内核交换机
+        # 使用OVS Bridge交换机（WSL兼容）
         s1 = self.addSwitch("s1")
 
-        # 定义链路特性 - 使用配置文件中的网络参数
-        link_opts = dict(
-            bw=config["network"]["bandwidth"],           # 带宽
-            delay=config["network"]["delay"],            # 延迟
-            loss=config["network"]["loss"],              # 丢包率
-            max_queue_size=config["network"]["queue_size"],  # 队列大小
-            use_htb=True       # 使用HTB队列调度器
-        )
+        # 定义链路特性 - WSL适配，使用最简单的配置
+        if is_wsl():
+            # 在WSL中不使用流量控制，避免qdisc问题
+            link_opts = dict()
+            info("*** 在WSL环境中使用默认链路配置（无流量控制）\n")
+        else:
+            # 在非WSL环境中使用完整配置
+            link_opts = dict(
+                bw=config["network"]["bandwidth"],           # 带宽
+                delay=config["network"]["delay"],            # 延迟
+                loss=config["network"]["loss"],              # 丢包率
+                max_queue_size=config["network"]["queue_size"],  # 队列大小
+                use_htb=True       # 使用HTB队列调度器
+            )
 
         info("*** 添加高速网络链路:\n")
         info(f"* 所有链路配置: {link_opts}\n")
@@ -79,10 +102,18 @@ def signal_handler(signum, frame):
 
 def run_experiment():
     """
-    创建网络，运行分布式ML应用程序，并启动CLI
+    创建网络，运行分布式ML应用程序，并启动CLI (WSL适配版)
     """
     # 注册信号处理器
     signal.signal(signal.SIGINT, signal_handler)
+    
+    # 检测WSL环境
+    if is_wsl():
+        info("*** 检测到WSL环境\n")
+        PYTHON_CMD = get_python_path()
+        info(f"*** 使用Python路径: {PYTHON_CMD}\n")
+    else:
+        PYTHON_CMD = PYTHON
     
     # --- 配置 ---
     SERVER_SCRIPT = f"{PROJECT_DIR}/server_multithreading.py"
@@ -100,11 +131,11 @@ def run_experiment():
     # 创建自定义拓扑实例
     topo = MultithreadingTopo()
 
-    # 创建Mininet网络实例
+    # 创建Mininet网络实例 - WSL适配，使用OVS Bridge
     net = Mininet(
         topo=topo,
-        switch=OVSKernelSwitch,
-        controller=RemoteController,
+        switch=OVSBridge,  # 使用OVS Bridge，不需要OpenFlow控制器
+        controller=None,  # 明确指定不使用控制器
         link=TCLink,  # 使用TCLink进行流量控制
         autoSetMacs=True,
     )
@@ -139,12 +170,18 @@ def run_experiment():
     # 创建服务器日志文件
     os.makedirs(os.path.dirname(SERVER_LOG), exist_ok=True)
     
-    # 启动服务器
-    server_cmd = f"cd {PROJECT_DIR} && {PYTHON} -u {SERVER_SCRIPT}"
+    # 启动服务器 - WSL适配
+    if is_wsl():
+        # 在WSL中，需要激活虚拟环境
+        server_cmd = f"cd {PROJECT_DIR} && source venv/bin/activate && {PYTHON_CMD} -u {SERVER_SCRIPT}"
+    else:
+        server_cmd = f"cd {PROJECT_DIR} && {PYTHON_CMD} -u {SERVER_SCRIPT}"
+    
     info(f"在服务器上执行: {server_cmd}\n")
     
     server_proc = server_node.popen(
-        server_cmd.split(), 
+        server_cmd, 
+        shell=True,  # 使用shell执行以支持source命令
         stdout=open(SERVER_LOG, "w"), 
         stderr=open(SERVER_LOG, "a")
     )
@@ -166,33 +203,48 @@ def run_experiment():
     env = os.environ.copy()
     env['SERVER_HOST'] = server_ip
     
-    # Worker 0
-    worker0_cmd = f"cd {PROJECT_DIR} && {PYTHON} -u {WORKER_SCRIPT} 0"
+    # Worker 0 - WSL适配
+    if is_wsl():
+        worker0_cmd = f"cd {PROJECT_DIR} && source venv/bin/activate && {PYTHON_CMD} -u {WORKER_SCRIPT} 0"
+    else:
+        worker0_cmd = f"cd {PROJECT_DIR} && {PYTHON_CMD} -u {WORKER_SCRIPT} 0"
+    
     info(f"在worker0上执行: {worker0_cmd}\n")
     worker0_proc = worker0_node.popen(
-        worker0_cmd.split(), 
+        worker0_cmd, 
+        shell=True,  # 使用shell执行以支持source命令
         stdout=open(WORKER0_LOG, "w"), 
         stderr=open(WORKER0_LOG, "a"),
         env=env
     )
     worker_processes.append(worker0_proc)
 
-    # Worker 1
-    worker1_cmd = f"cd {PROJECT_DIR} && {PYTHON} -u {WORKER_SCRIPT} 1"
+    # Worker 1 - WSL适配
+    if is_wsl():
+        worker1_cmd = f"cd {PROJECT_DIR} && source venv/bin/activate && {PYTHON_CMD} -u {WORKER_SCRIPT} 1"
+    else:
+        worker1_cmd = f"cd {PROJECT_DIR} && {PYTHON_CMD} -u {WORKER_SCRIPT} 1"
+    
     info(f"在worker1上执行: {worker1_cmd}\n")
     worker1_proc = worker1_node.popen(
-        worker1_cmd.split(), 
+        worker1_cmd, 
+        shell=True,  # 使用shell执行以支持source命令
         stdout=open(WORKER1_LOG, "w"), 
         stderr=open(WORKER1_LOG, "a"),
         env=env
     )
     worker_processes.append(worker1_proc)
 
-    # Worker 2
-    worker2_cmd = f"cd {PROJECT_DIR} && {PYTHON} -u {WORKER_SCRIPT} 2"
+    # Worker 2 - WSL适配
+    if is_wsl():
+        worker2_cmd = f"cd {PROJECT_DIR} && source venv/bin/activate && {PYTHON_CMD} -u {WORKER_SCRIPT} 2"
+    else:
+        worker2_cmd = f"cd {PROJECT_DIR} && {PYTHON_CMD} -u {WORKER_SCRIPT} 2"
+    
     info(f"在worker2上执行: {worker2_cmd}\n")
     worker2_proc = worker2_node.popen(
-        worker2_cmd.split(), 
+        worker2_cmd, 
+        shell=True,  # 使用shell执行以支持source命令
         stdout=open(WORKER2_LOG, "w"), 
         stderr=open(WORKER2_LOG, "a"),
         env=env
