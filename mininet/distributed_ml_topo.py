@@ -58,9 +58,9 @@ def run_experiment():
     # Adjust this path if your scripts are located elsewhere
     PROJECT_DIR = "/root/bound-tolerance-research"
 
-    SERVER_SCRIPT = f"{PROJECT_DIR}/server_compressed.py"
-    WORKER_SCRIPT = f"{PROJECT_DIR}/worker_trainer.py"
-    INITIAL_SERVER_PORT = 60001  # Default port used in your script
+    SERVER_SCRIPT = f"{PROJECT_DIR}/server_multithreading.py"
+    WORKER_SCRIPT = f"{PROJECT_DIR}/worker_multithreading.py"
+    INITIAL_SERVER_PORT = 9999  # Default port used in your script
 
     # Define log paths within the Mininet nodes' filesystems
     # Using /tmp/ for simplicity, adjust if needed
@@ -115,7 +115,8 @@ def run_experiment():
 
     # Create log file for redirecting output
     os.makedirs(os.path.dirname(SERVER_LOG), exist_ok=True)
-    server_proc = server_node.popen(server_cmd.split(), stdout=open(SERVER_LOG, "w"), stderr=open(SERVER_LOG, "a"))
+    # server_proc = server_node.popen(server_cmd.split(), stdout=open(SERVER_LOG, "w"), stderr=open(SERVER_LOG, "a"))
+    server_node.popen(server_cmd.split(), stdout=open(SERVER_LOG, "w"), stderr=open(SERVER_LOG, "a"))
 
     # Give the server a moment to start up and bind to the port
     info("*** Waiting for server to initialize...\n")
