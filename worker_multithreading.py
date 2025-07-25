@@ -143,7 +143,7 @@ class Worker:
 
         # Check for latest checkpoint
         latest_checkpoint = self.find_latest_checkpoint()
-        # latest_checkpoint = None
+        latest_checkpoint = None
         if latest_checkpoint:
             print(f"Found latest checkpoint at {latest_checkpoint}. Will resume training from this point.")
         else:

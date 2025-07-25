@@ -318,3 +318,4 @@ if __name__ == "__main__":
     server_port = int(args.port)
     print(f"Starting server at {server_host}:{server_port}...")
     server = Server(host=server_host, tcp_port=server_port)
+    server.start()

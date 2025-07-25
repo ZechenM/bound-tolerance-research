@@ -58,7 +58,7 @@ def run_experiment():
 
     SERVER_SCRIPT = f"{PROJECT_DIR}/server_multithreading.py"
     WORKER_SCRIPT = f"{PROJECT_DIR}/worker_multithreading.py"
-    INITIAL_SERVER_PORT = 9999  # Default port used in your script
+    INITIAL_SERVER_PORT = 60001  # Default port used in your script
 
     # Define log paths within the Mininet nodes' filesystems
     # Using /tmp/ for simplicity, adjust if needed
