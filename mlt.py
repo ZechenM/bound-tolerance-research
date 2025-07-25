@@ -452,10 +452,13 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
                     raise ConnectionError("RECEIVER MLT: Did not receive proper Probe (P) signal from sender.")
         except socket.timeout as e:
             print(f"[Worker {tcp_addr}] RECEIVER MLT: Socket timeout occurred: {e}")
+            return None
         except socket.error as e:
             print(f"[Worker {tcp_addr}] RECEIVER MLT: Socket error occurred: {e}")
+            return None
         except Exception as e:
             print(f"[Worker {tcp_addr}] RECEIVER MLT: Unexpected error occurred: {e}")
+            return None
             
     if not has_stopped:
         if config.DEBUG:
