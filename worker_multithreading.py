@@ -16,9 +16,9 @@ from my_datasets import CIFAR10Dataset
 resume_from_checkpoint = False
 
 train_args = TrainingArguments(
-    num_train_epochs=3,
-    per_device_train_batch_size=32,
-    per_device_eval_batch_size=32,
+    num_train_epochs=2,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
     weight_decay=0.01,
     learning_rate=0.001,
     logging_steps=10,
@@ -191,11 +191,27 @@ def main():
         type=int,
         help="The unique integer ID for this worker (e.g., 0, 1, or 2).",
     )
+    parser.add_argument(
+        "server_host",
+        nargs="?",
+        type=str,
+        default="127.0.0.1",
+        help="The IP address of the server. Default is 127.0.0.1.",
+    )
+
+    parser.add_argument(
+        "server_port",
+        nargs="?",
+        type=int,
+        default=9999,
+        help="The port number of the server. Default is 9999.",
+    )
     args = parser.parse_args()
 
     worker = Worker(
         worker_id=args.worker_id,
-        server_host="127.0.0.1",
+        server_host=args.server_host,
+        tcp_port=args.server_port,
     )
     worker.train_worker()
 

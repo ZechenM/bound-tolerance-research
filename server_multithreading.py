@@ -1,3 +1,4 @@
+import argparse
 import socket
 import struct
 import threading
@@ -308,5 +309,12 @@ class Server:
 
 
 if __name__ == "__main__":
-    server = Server(num_workers=3)
-    server.start()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--port", type=str, default="9999")
+    args = parser.parse_args()
+
+    server_host = str(args.host)
+    server_port = int(args.port)
+    print(f"Starting server at {server_host}:{server_port}...")
+    server = Server(host=server_host, tcp_port=server_port)
