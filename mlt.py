@@ -3,7 +3,7 @@ import socket
 import struct
 import traceback
 import utility
-import pickle
+# import pickle
 import numpy as np
 import torch
 
@@ -234,6 +234,9 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
                     except Exception as e:
                         # Log UDP send error but continue; rely on bitmap retransmission
                         print(f"SENDER MLT: UDP sendto error for chunk {i}: {e}")
+                    
+                    if config.DEBUG:
+                        print(f"SENDER MLT: Sent chunk {i + 1}/{num_chunks} via UDP.")
 
                 cond, new_bitmap = _check_if_told_to_stop(tcp_sock, signal_counter, server_ack_bitmap)
                 if cond:
