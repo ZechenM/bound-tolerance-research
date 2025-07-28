@@ -406,9 +406,14 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
             if udp_sock not in readable:
                 if config.DEBUG:
                     print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received on UDP socket. Continuing to wait at {time_with_ms}...")
-                continue
+            
+            if tcp_sock not in readable:
+                if config.DEBUG:
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received on TCP socket. Continuing to wait at {time_with_ms}...")
 
             if udp_sock in readable:
+                if config.DEBUG:
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): UDP socket is readable. Waiting for data from sender at {time_with_ms}...")
                 packet, udp_addr = udp_sock.recvfrom(expected_packet_size + 100)
                 now = datetime.datetime.now()
                 time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
@@ -442,6 +447,8 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
             
             # CRITICAL CHANGE FOR SIGNAL HANDLING
             if tcp_sock in readable:
+                if config.DEBUG:
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT(TCP): TCP socket is readable. Waiting for signal from sender at {time_with_ms}...")
                 signal, received_counter = utility.recv_signal_tcp(tcp_sock)
                 
                 if not signal:
