@@ -1,5 +1,6 @@
 import os
 import time
+import datetime
 
 from mininet.link import TCLink
 from mininet.log import info, setLogLevel
@@ -7,7 +8,7 @@ from mininet.net import Mininet
 from mininet.node import OVSKernelSwitch, RemoteController
 from mininet.topo import Topo
 
-PYTHON = "/root/bound-tolerance-research/.venv/bin/python3.12"
+PYTHON = "/root/.venv/bin/python3.12"
 
 
 class WorkerServerTopo(Topo):
@@ -32,7 +33,7 @@ class WorkerServerTopo(Topo):
         s1 = self.addSwitch("s1")
 
         # Define link characteristics
-        link_opts_base = dict(bw=100, delay="1ms", loss=1, max_queue_size=1000, use_htb=True)
+        link_opts_base = dict(bw=1000, delay="1ms", loss=1, max_queue_size=1000, use_htb=True)
         link_opts_server = dict(bw=1000, delay="1ms", loss=1, max_queue_size=1000, use_htb=True)
 
         info("*** Adding Worker Links with Loss:\n")
@@ -54,7 +55,7 @@ def run_experiment():
     # --- Configuration ---
     # Assumes your project scripts are located here within the Mininet VM/environment
     # Adjust this path if your scripts are located elsewhere
-    PROJECT_DIR = "/root/bound-tolerance-research"
+    PROJECT_DIR = "/root/shared"
 
     SERVER_SCRIPT = f"{PROJECT_DIR}/server_multithreading.py"
     WORKER_SCRIPT = f"{PROJECT_DIR}/worker_multithreading.py"
@@ -62,7 +63,9 @@ def run_experiment():
 
     # Define log paths within the Mininet nodes' filesystems
     # Using /tmp/ for simplicity, adjust if needed
-    LOG_DIR_BASE = f"{PROJECT_DIR}/logs"
+    now = datetime.datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    LOG_DIR_BASE = f"{PROJECT_DIR}/mininet_logs/{timestamp}"
     SERVER_LOG = f"{LOG_DIR_BASE}/server.log"
     WORKER0_LOG = f"{LOG_DIR_BASE}/worker0.log"
     WORKER1_LOG = f"{LOG_DIR_BASE}/worker1.log"
@@ -99,9 +102,9 @@ def run_experiment():
     # Create log directory for all hosts
     info(f"*** Creating log directory '{LOG_DIR_BASE}' on nodes...\n")
     for node in [server_node, worker0_node, worker1_node, worker2_node]:
+        # Optional: Ensure the project directory exists if needed by scripts
+        node.cmd(f'mkdir -p {PROJECT_DIR}') # Uncomment if scripts expect it
         node.cmd(f"mkdir -p {LOG_DIR_BASE}")
-    # Optional: Ensure the project directory exists if needed by scripts
-    # node.cmd(f'mkdir -p {PROJECT_DIR}') # Uncomment if scripts expect it
 
     # --- Start the distributed ML applications ---
     info("*** Starting Server Application...\n")
@@ -164,6 +167,22 @@ def run_experiment():
     except KeyboardInterrupt:
         info("\n*** Keyboard interrupt received. Stopping network...")
     finally:
+        # 2. Terminate all processes in the finally block
+        print("Cleaning up processes...")
+        if server_proc:
+            print("Terminating server...")
+            server_proc.terminate()
+        if worker0_proc:
+            print("Terminating worker 0...")
+            worker0_proc.terminate()
+        # Add termination for worker1_proc and worker2_proc as well
+        if worker1_proc:
+            print("Terminating worker 1...")
+            worker1_proc.terminate()
+        if worker2_proc:
+            print("Terminating worker 2...")
+            worker2_proc.terminate()
+
         info("*** Stopping network\n")
         net.stop()
 

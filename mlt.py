@@ -1,3 +1,4 @@
+import datetime
 import select
 import socket
 import struct
@@ -236,7 +237,9 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
                         print(f"SENDER MLT: UDP sendto error for chunk {i}: {e}")
                     
                     if config.DEBUG:
-                        print(f"SENDER MLT: Sent chunk {i + 1}/{num_chunks} via UDP.")
+                        now = datetime.datetime.now()
+                        time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
+                        print(f"SENDER MLT: Sent chunk {i}/{num_chunks} via UDP at {time_with_ms}.")
 
                 cond, new_bitmap = _check_if_told_to_stop(tcp_sock, signal_counter, server_ack_bitmap)
                 if cond:
@@ -251,7 +254,12 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
             # --- Phase 3: Send "Probe" (P) signal via TCP ---
             # Send 'Probe' (P) and wait for 'Stop' (S) or 'Bitmap' (B)
             if config.DEBUG:
-                print("SENDER MLT: Sending 'Probe' (P) via TCP.")
+                # Get the current time object
+                now = datetime.datetime.now()
+
+                # Format using an f-string, calculating milliseconds from microseconds
+                time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
+                print(f"SENDER MLT: Sending 'Probe' (P) via TCP at {time_with_ms}.")
             try:
                 utility.send_signal_tcp(tcp_sock, b"P", signal_counter)
             except Exception as e:
@@ -387,13 +395,28 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
     while None in received_chunks:
         try:
             readable, _, _ = select.select([udp_sock, tcp_sock], [], [], 0.001)
+            now = datetime.datetime.now()
+            time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
+
+            if not readable:
+                if config.DEBUG:
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received in this round. Continuing to wait at {time_with_ms}...")
+                continue
+            
+            if udp_sock not in readable:
+                if config.DEBUG:
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received on UDP socket. Continuing to wait at {time_with_ms}...")
+                continue
 
             if udp_sock in readable:
                 packet, udp_addr = udp_sock.recvfrom(expected_packet_size + 100)
-                udp_recv_counter += 1
+                now = datetime.datetime.now()
+                time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
                 if config.DEBUG:
-                    print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}).")
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}) at {time_with_ms}.")
+                    udp_recv_counter += 1
                 if len(packet) < 12:
+                    udp_recv_counter -= 1  # Ignore this packet, it is too small
                     print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Packet too small: {len(packet)} bytes. Ignoring.")
                     continue
                 
@@ -430,9 +453,14 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
                     signal, received_counter = utility.recv_signal_tcp(tcp_sock)
                 
                 if signal == b"P":
+                    # Get the current time object
+                    now = datetime.datetime.now()
+
+                    # Format using an f-string, calculating milliseconds from microseconds
+                    time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
                     if config.DEBUG:
-                        print(f"[Worker {tcp_addr}] RECEIVER MLT: Received 'Probe' (P) signal from server.")
-                    
+                        print(f"[Worker {tcp_addr}] RECEIVER MLT: Received 'Probe' (P) signal with counter {received_counter} from sender at {time_with_ms}.")
+
                     if num_chunks > 0 and (received_chunks.count(None) / num_chunks) <= config.loss_tolerance:
                         if config.DEBUG:
                             print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
@@ -447,7 +475,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
                         break
                     else:
                         if config.DEBUG:
-                            print(f"[Worker {tcp_addr}] RECEIVER MLT: Sending 'Bitmap' (B) {bitmap}")
+                            print(f"[Worker {tcp_addr}] RECEIVER MLT: Sending 'Bitmap' (B) {bitmap} with counter {received_counter} to sender.  ")
                         utility.send_signal_tcp(tcp_sock, b"B", received_counter)
                         # Send the bitmap back to the sender
                         tcp_sock.sendall(bitmap)
