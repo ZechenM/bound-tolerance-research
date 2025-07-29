@@ -2,24 +2,25 @@
 
 ## Enter Mininet Docker Image
 
-Make sure you have docker or docker desktop app installed. If you are using docker desktop app, make sure the you manually set the memory to a resonably large size under preferences/resources.
+Make sure you have docker or docker desktop app installed. If you are using docker desktop app, make sure the you manually set the memory to a reasonably large size under preferences/resources.
 
 ```bash
 # Pull the image
 docker pull davidlin123/mininet:latest
 
 # Run with proper configuration
-docker run -it --rm \
+docker run -it \
   --name mininet \
   --privileged \
   --network host \
   -v /lib/modules:/lib/modules \
+  -v $(pwd):/root/shared \
   davidlin123/mininet:latest
 ```
 
 This image is Ubuntu. So the packet manager is apt.
 
-## Setup SSH
+## Setup SSH (Discarded Step)
 
 ```bash
 ssh-keygen
@@ -54,10 +55,11 @@ source .venv/bin/activate
 ./pox/pox.py forwarding.l2_learning
 ```
 
+2. Update `PYTHON = "/root/share/.venv/bin/python3.12"`in `distributed_ml_topo.py`
 2. in another shell in the project home directory, run:
 
 ```bash
-sudo python3 mininet/distributed-ml-topo.py
+sudo python3 mininet/distributed_ml_topo.py
 ```
 
 3. in four other shells in the project directory, run:
