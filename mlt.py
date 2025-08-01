@@ -277,8 +277,9 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
                 print(f"SENDER MLT: Timeout ({probe_response_timeout}s) waiting for server response to 'Probe'.")
                 no_progress_rounds += 1
                 if no_progress_rounds >= max_retries_no_progress:
-                    print("SENDER MLT: Max retries with no progress reached. Aborting.")
-                    return False
+                    # print("SENDER MLT: Max retries with no progress reached. Aborting.")
+                    # return False
+                    print(f"SENDER MLT: Retried {no_progress_rounds} times")
                 continue  # Retry by sending probe again after resending unacked chunks
 
             signal, received_counter = utility.recv_signal_tcp(tcp_sock)
@@ -313,8 +314,10 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
                 server_ack_bitmap = bytearray(new_bitmap_data)
 
                 if no_progress_rounds >= max_retries_no_progress:
-                    print("SENDER MLT ERROR: Max retries with no progress reached. Aborting.")
-                    return False
+                    # print("SENDER MLT ERROR: Max retries with no progress reached. Aborting.")
+                    # return False
+                    pass
+                    
             else:
                 print(f"SENDER MLT ERROR: Unrecognized signal '{signal}' from receiver.")
                 return False
@@ -398,18 +401,18 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
             now = datetime.datetime.now()
             time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
 
-            if not readable:
-                if config.DEBUG:
-                    print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received in this round. Continuing to wait at {time_with_ms}...")
-                continue
+            # if not readable:
+            #     if config.DEBUG:
+            #         print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received in this round. Continuing to wait at {time_with_ms}...")
+            #     continue
             
-            if udp_sock not in readable:
-                if config.DEBUG:
-                    print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received on UDP socket. Continuing to wait at {time_with_ms}...")
+            # if udp_sock not in readable:
+            #     if config.DEBUG:
+            #         print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received on UDP socket. Continuing to wait at {time_with_ms}...")
             
-            if tcp_sock not in readable:
-                if config.DEBUG:
-                    print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received on TCP socket. Continuing to wait at {time_with_ms}...")
+            # if tcp_sock not in readable:
+            #     if config.DEBUG:
+            #         print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received on TCP socket. Continuing to wait at {time_with_ms}...")
 
             if udp_sock in readable:
                 if config.DEBUG:
