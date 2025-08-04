@@ -35,7 +35,7 @@ fi
 if [ -n "$3" ]; then
     CLA_SERVER_PORT="$3"
 else
-    CLA_SERVER_PORT="9999"  # Default port, change as needed
+    CLA_SERVER_PORT="60001"  # Default port, change as needed
 fi
 
 # Construct LOG_DIR with optional data and experiment descriptions
@@ -60,25 +60,12 @@ echo "LOGS: ${LOG_DIR}"
 # Remove old server port file if exists
 rm -f .server_port
 
-SERVER_SCRIPT="server_multithreading.py"
-WORKER_SCRIPT="worker_multithreading.py"
+SERVER_SCRIPT="server_compressed.py"
+WORKER_SCRIPT="worker_trainer.py"
 SERVER_LOG="${LOG_DIR}/server_dynamic_bound_loss_log.txt"
 WORKER0_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log0.txt"
 WORKER1_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log1.txt"
 WORKER2_LOG="${LOG_DIR}/worker_dynamic_bound_loss_log2.txt"
-
-# # Check if any .pkl files exist
-# if ls *.pkl > /dev/null 2>&1; then
-#     echo ".pkl files found."
-# else
-#     echo "No .pkl files found. Generating necessary pre-train data"
-#     python ./prepare_data.py
-#     echo "Pre-training data generated. Please re-run the script."
-#     exit 1
-# fi
-
-# Create the logs directory if it doesn't exist
-# mkdir -p ./logs
 
 # Create log files if they do not exist
 touch "$SERVER_LOG" "$WORKER0_LOG" "$WORKER1_LOG" "$WORKER2_LOG"

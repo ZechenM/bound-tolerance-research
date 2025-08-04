@@ -1,7 +1,6 @@
+import argparse
 import glob
 import os
-import random
-import sys
 
 import numpy as np
 import torch
@@ -11,7 +10,7 @@ from sklearn.metrics import accuracy_score
 from transformers import TrainingArguments
 
 import config
-from distributed_trainer import DistributedTrainer
+from distributed_trainer_multithreading import DistributedTrainerMultithreading
 from my_datasets import CIFAR10Dataset
 
 resume_from_checkpoint = False
@@ -35,17 +34,17 @@ train_args = TrainingArguments(
 
 
 class Worker:
-    def __init__(self, worker_id, host="localhost", port=60001):
+    def __init__(self, worker_id, server_host, tcp_port=9999):
         self.worker_id = worker_id
-        self.server_host = host
-        self.server_port = port
-        print(f"Worker {self.worker_id} connecting to server at {self.server_host}:{self.server_port}")
+        self.server_host = server_host
+        self.server_port = tcp_port
+        print(f"Worker {self.worker_id} WILL BE connecting to server at {self.server_host}:{self.server_port}")
 
         # Set up device
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
             print(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
-            print(f"CUDA version: {torch.version.cuda}")
+            # print(f"CUDA version: {torch.version.cuda}")
         elif torch.backends.mps.is_available():
             self.device = torch.device("mps")
             print("Using MPS device")
@@ -59,8 +58,10 @@ class Worker:
         # Load denseNet169 model
         # self.model = models.densenet169(weights=None)
         # Modify the model's classifier to output 10 classes (CIFAR10)
+        # ------------- denseNet 169 specific starts -------------
         # in_features = self.model.classifier.in_features
         # self.model.classifier = nn.Linear(in_features, 10)
+        # ------------- denseNet 169 specific ends -------------
         self.model = self.model.to(self.device)
         print(f"Model moved to {self.device}")
 
@@ -142,13 +143,13 @@ class Worker:
 
         # Check for latest checkpoint
         latest_checkpoint = self.find_latest_checkpoint()
-        # latest_checkpoint = None
+        latest_checkpoint = None
         if latest_checkpoint:
             print(f"Found latest checkpoint at {latest_checkpoint}. Will resume training from this point.")
         else:
             print("No checkpoint found. Starting training from scratch.")
 
-        trainer = DistributedTrainer(
+        trainer = DistributedTrainerMultithreading(
             model=self.model,
             args=self.training_args,
             train_dataset=self.train_dataset,
@@ -166,10 +167,14 @@ class Worker:
         print(f"Worker {self.worker_id} starting training with evaluation...")
         if resume_from_checkpoint:
             print(f"Resuming training from checkpoint: {latest_checkpoint}")
-            train_result = trainer.train(resume_from_checkpoint=latest_checkpoint)
+            if trainer.connect():
+                train_result = trainer.train(resume_from_checkpoint=latest_checkpoint)
+                trainer.close()
         else:
             print("Starting training from scratch")
-            train_result = trainer.train()
+            if trainer.connect():
+                train_result = trainer.train()
+                trainer.close()
 
         # Training completed
         print(f"Worker {self.worker_id} training DONE: {train_result}")
@@ -178,25 +183,36 @@ class Worker:
         eval_results = trainer.evaluate()
         print(f"Worker {self.worker_id} evaluation DONE: {eval_results}")
 
-        trainer.print_total_network_latency()
-
 
 def main():
-    if len(sys.argv) < 2:
-        print("Invalid usage.")
-        print("USAGE: python worker_trainer.py <WORKER_ID> [<SERVER_IP>] [<SERVER_PORT>]")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Run a distributed ML worker client.")
+    parser.add_argument(
+        "worker_id",
+        type=int,
+        help="The unique integer ID for this worker (e.g., 0, 1, or 2).",
+    )
+    parser.add_argument(
+        "server_host",
+        nargs="?",
+        type=str,
+        default="127.0.0.1",
+        help="The IP address of the server. Default is 127.0.0.1.",
+    )
 
-    # Set random seed for reproducibility
-    torch.manual_seed(42)
-    random.seed(42)
-    np.random.seed(42)
+    parser.add_argument(
+        "server_port",
+        nargs="?",
+        type=int,
+        default=9999,
+        help="The port number of the server. Default is 9999.",
+    )
+    args = parser.parse_args()
 
-    worker_id = int(sys.argv[1])
-    host = str(sys.argv[2]) if len(sys.argv) > 2 else "localhost"
-    port = int(sys.argv[3]) if len(sys.argv) > 3 else 60001
-
-    worker = Worker(worker_id, host=host, port=port)
+    worker = Worker(
+        worker_id=args.worker_id,
+        server_host=args.server_host,
+        tcp_port=args.server_port,
+    )
     worker.train_worker()
 
 

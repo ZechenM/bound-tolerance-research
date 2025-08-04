@@ -7,10 +7,7 @@ from enum import Enum
 
 import torch
 
-from compression import *
-from config import *
-
-print(f"Compression Method: {compression_method}")
+import config
 
 
 class TrainingPhase(Enum):
@@ -20,7 +17,7 @@ class TrainingPhase(Enum):
 
 
 class Server:
-    def __init__(self, port, host="localhost", num_workers=3):
+    def __init__(self, host, port, num_workers=3):
         self.host = host
         self.port = port
         self.num_workers = num_workers
@@ -30,7 +27,7 @@ class Server:
         self.worker_eval_acc = []
         self.worker_epochs = []
 
-        self.drop_rate = 0.8  # X% probability to zero out gradients
+        self.drop_rate = 0.0  # X% probability to zero out gradients
 
         # v-threshold configurations and trackers
         self.enable_v_threshold = False
@@ -44,6 +41,12 @@ class Server:
         self.counter = 0
         self.total_params = 0
         self.zeroed_params = 0
+
+        # gradient communication protocal configurations
+        self.protocol = config.protocol
+        self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.UDP_socket.bind(("0.0.0.0", self.port + 1))  # TODO: each worker should allocate one UDP socket
+        self.loss_tolerance = config.loss_tolerance
 
         self.write_to_server_port()
         self.start_server()
@@ -63,7 +66,7 @@ class Server:
         self.server_socket.listen(self.num_workers)
         self.is_listening = True
         print(f"Server listening on {self.host}:{self.port}...")
-        
+
         print(f"V-threshold enabled: {self.enable_v_threshold}")
 
     def recv_all(self, conn, size):
@@ -90,12 +93,13 @@ class Server:
         self.connections = []
         self.conn_addr_map = {}
         for _ in range(self.num_workers):
+            assert self.server_socket is not None, "Server socket is not initialized."
             conn, addr = self.server_socket.accept()
             self.connections.append(conn)
             self.conn_addr_map[conn] = addr
-            # print(f"Connected to worker at {addr}")
+            print(f"Connected to worker at {addr}")
 
-        # print("All workers connected.")
+        print("All workers connected.")
 
     def _training_phase_update(self):
         if len(self.worker_eval_acc) < 3:
@@ -127,14 +131,40 @@ class Server:
             self.training_phase = proposed_phase
 
         self.prev_avg_acc = curr_avg_acc
-        
+
         print(f"All worker eval acc: {self.worker_eval_acc}")
         print(f"All worker epochs: {self.worker_epochs}")
         print(f"Current averaged accuracy: {self.prev_avg_acc}")
         print(f"Current training phase: {self.training_phase}")
-        
+
         self.worker_eval_acc.clear()
         self.worker_epochs.clear()
+
+    def recv_data_TCP(self, TCP_sock):
+        # Receive the size of the incoming data
+        size_data = self.recv_all(TCP_sock, 4)
+        if not size_data:
+            raise ValueError("Failed to receive data size.")
+
+        size = struct.unpack("!I", size_data)[0]
+
+        # Receive the actual data
+        data = self.recv_all(TCP_sock, size)
+        if not data:
+            raise ValueError("Failed to receive data.")
+
+        # response with ACK
+        # TCP_sock.sendall(b"A")
+
+        grad = pickle.loads(data)
+
+        return grad
+
+    def send_data_TCP(self, TCP_sock, gradient):
+        # Send the size of the data first
+        TCP_sock.sendall(struct.pack("!I", len(gradient)))
+        # Sendall the actual data
+        TCP_sock.sendall(gradient)
 
     def recv_send(self):
         """Receive gradients from all workers and send back averaged gradients"""
@@ -142,26 +172,13 @@ class Server:
         self.has_eval_acc = False
 
         for conn in self.connections:
-            # Receive the size of the incoming data
-            size_data = self.recv_all(conn, 4)
-            if not size_data:
-                print("Failed to receive data size.")
-                continue
-            size = struct.unpack("!I", size_data)[0]
+            grad = self.recv_data_TCP(conn)
 
-            # Receive the actual data
-            data = self.recv_all(conn, size)
-            if not data:
-                print("Failed to receive data.")
+            if grad is None:
+                print(f"Failed to receive data from worker {self.conn_addr_map[conn]}.")
                 continue
 
-            # response with ACK
-            conn.sendall(b"A")
-
-            compressed_grad = pickle.loads(data)
-            grad = decompress(compressed_grad)
-
-            if "eval_acc" in grad:
+            if "eval_acc" in grad and "epoch" in grad:
                 self.has_eval_acc = True
                 self.worker_eval_acc.append(grad["eval_acc"])
                 self.worker_epochs.append(grad["epoch"])
@@ -169,10 +186,11 @@ class Server:
                 del grad["eval_acc"]
 
             gradients.append(grad)
-            # print(f"Received gradients from worker {self.conn_addr_map[conn]}")
+            # if config.DEBUG:
+            #     print(f"Received gradients from worker {self.conn_addr_map[conn]}: {grad.keys()}")
 
-        # Received gradients from all workers
-        # print("All gradients received.")
+        if config.DEBUG:
+            print(f"Received {len(gradients)} gradients from workers.")
 
         # check accuracy and update training phase accrodingly
         if self.has_eval_acc:
@@ -180,12 +198,12 @@ class Server:
 
         # based on training phase, update the drop rate
         if self.training_phase == TrainingPhase.BEGIN:
-            self.drop_rate = 0.8
+            self.drop_rate = 0.0
         elif self.training_phase == TrainingPhase.MID:
             self.drop_rate = 0.0
         elif self.training_phase == TrainingPhase.FINAL:
             self.drop_rate = 0.0
-            
+
         if self.has_eval_acc:
             print(f"Current drop rate: {self.drop_rate}\n")
 
@@ -252,17 +270,11 @@ class Server:
                 self.total_params = 0
                 self.zeroed_params = 0
 
-        # Compress the averaged gradients
-        compressed_avg_gradients = compress(avg_gradients)
-        avg_gradients_data = pickle.dumps(compressed_avg_gradients)
-
         # Send averaged gradients back to all workers
         for conn in self.connections:
-            # Send the size of the data first
-            conn.sendall(struct.pack("!I", len(avg_gradients_data)))
-            # Sendall the actual data
-            conn.sendall(avg_gradients_data)
-            # print(f"Sent averaged gradients to worker {self.conn_addr_map[conn]}")
+            tcp_sock = conn
+            ip, port = self.conn_addr_map[conn]
+            self.send_data_TCP(tcp_sock, pickle.dumps(avg_gradients))
 
     def run_server(self) -> None:
         while self.is_listening:
@@ -282,6 +294,8 @@ class Server:
     def close_server(self) -> None:
         """Close the server"""
         self.is_listening = False
+        assert self.server_socket is not None, "Server socket is not initialized."
+        print("Closing server...")
         self.server_socket.close()
         print("Server closed.")
 
@@ -300,9 +314,11 @@ class Server:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=str, default="60001")
     args = parser.parse_args()
-    
+
+    server_host = str(args.host)
     server_port = int(args.port)
     print(f"Starting server at port with {server_port}...")
-    server = Server(server_port)
+    server = Server(server_host, server_port)

@@ -1,4 +1,3 @@
-import pickle
 import socket
 import struct
 import time
@@ -7,6 +6,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import Trainer
+
+import mlt
 
 
 def custom_collate_fn(batch):
@@ -24,64 +25,87 @@ def custom_collate_fn(batch):
     return {"pixel_values": pixel_values, "labels": labels}
 
 
-class DistributedTrainer(Trainer):
+class DistributedTrainerMultithreading(Trainer):
     def __init__(self, *args, **kwargs):
         # Extract our custom parameters before passing to parent
         self.server_host = kwargs.pop("server_host", "localhost")
-        self.server_port = kwargs.pop("server_port", 60001)
-        self.worker_id = kwargs.pop("worker_id", 0)
+        self.tcp_port = kwargs.pop("server_port", 9999)
+        # ID has to be passed in - should not give it a valid default value
+        self.id = kwargs.pop("worker_id", -666)
+        if self.id == -666:
+            raise ValueError("Cannot identify the worker id for this worker")
         self.device = kwargs.pop("device", torch.device("cpu"))  # Get device from kwargs
         self.network_latency_list = []
         self.start_time = 0
         self.end_time = 0
         self.past_epoch = 0.0
-        self.protocol = kwargs.pop("protocol", "TCP")
-        self.loss_tolerance = kwargs.pop("loss_tolerance", 0.00)
-        self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.UDP_socket.bind(("0.0.0.0", self.server_port + 2 + self.worker_id))
+        self.protocol = kwargs.pop("protocol", "MLT")
+        self.loss_tolerance = kwargs.pop("loss_tolerance", 0.03)
+        self.signal_counter = 0  # Initialize signal counter for MLT protocol
+
+        # network latency measurement
+        self.start_time = 0
+        self.end_time = 0
+        self.network_latency_list = []
 
         # Initialize parent class with remaining arguments
         super().__init__(*args, **kwargs)
 
-    def send_data_TCP(self, sock, data):
-        data_bytes = pickle.dumps(data)
-        # !I == >I for unsigned int, 4 bytes
-        sock.sendall(struct.pack("!I", len(data_bytes)))
-        sock.sendall(data_bytes)
+    def calculate_network_latency(self):
+        """
+        Calculate the network latency based on the start and end times.
+        """
 
-    def recv_data_TCP(self, sock):
-        # First receive the ACK from the server
-        # ack = sock.recv(1)
-        # if ack != b"A":
-        #     print(f"Warning: Expected ACK but received: {ack}")
+        latency = self.end_time - self.start_time
+        self.network_latency_list.append(latency)
 
-        # Now receive the actual data with size header
-        size_data = sock.recv(4)
-        if not size_data:
-            return None
-        size = struct.unpack("!I", size_data)[0]
+        print(f"[Worker {self.id}] (W->S->W) Network latency: {latency:.6f} seconds")
 
-        data = b""
-        while len(data) < size:
-            packet = sock.recv(size - len(data))
-            if not packet:
-                return None
-            data += packet
+    def print_total_network_latency(self):
+        """
+        Print the total network latency for all operations.
+        """
+        if self.network_latency_list:
+            total_latency = sum(self.network_latency_list)
+            print(f"[Worker {self.id}] Total network latency: {total_latency:.6f} seconds")
+        else:
+            print(f"[Worker {self.id}] No network latency recorded.")
 
-        return pickle.loads(data)
+    def connect(self):
+        """Establishes connection with the server and gets the dedicated UDP port."""
+        try:
+            self.tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # self.tcp_sock.setsockopt(
+            #     socket.IPPROTO_TCP, socket.TCP_NODELAY, 1
+            # )  # Disable Nagle's algorithm for low latency
+            self.tcp_sock.connect((self.server_host, self.tcp_port))
+            worker_addr = self.tcp_sock.getsockname()
+            print(f"[Worker {self.id}] Successfully connected to server at {self.server_host}:{self.tcp_port}")
+            print(f"[Worker {self.id}] Worker itself address: {worker_addr}")
 
-    def send_recv(self, gradients):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            # print(self.server_host, self.server_port)
-            s.connect((self.server_host, self.server_port))
-            print(f"Worker {self.worker_id} connected to server.")
-            self.send_data_TCP(s, gradients)
+            port_data = mlt._recv_all(self.tcp_sock, 4)
+            if not port_data:
+                print(f"[Worker {self.id}] Failed to receive dedicated UDP port from server.")
+                return False
 
-            # Receive averaged gradients from the server
-            avg_gradients = self.recv_data_TCP(s)
-            if avg_gradients is None:
-                return False, None
-        return True, avg_gradients
+            self.dedicated_server_udp_port = struct.unpack("!I", port_data)[0]
+            print(f"[Worker {self.id}] Received dedicated server UDP port: {self.dedicated_server_udp_port}")
+
+            self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            return True
+
+        except Exception as e:
+            print(f"[Worker {self.id}] Failed to connect to server: {e}")
+            return False
+
+    def close(self):
+        """closes the worker's sockets."""
+        if self.tcp_sock:
+            self.tcp_sock.close()
+        if self.udp_sock:
+            self.udp_sock.close()
+
+        print(f"[Worker {self.id}] Connections closed.")
 
     def get_train_dataloader(self):
         """
@@ -116,7 +140,7 @@ class DistributedTrainer(Trainer):
         model.train()
 
         current_epoch = self.state.epoch
-        print(f"Training Step Running - Worker {self.worker_id}, Current Epoch: {current_epoch}")
+        print(f"Training Step Running - Worker {self.id}, Current Epoch: {current_epoch}")
 
         # evaluate the model at the end of each epoch
         self.sent_eval = False
@@ -157,22 +181,45 @@ class DistributedTrainer(Trainer):
         gradients: dict[str, torch.Tensor | float] = {name: param.grad.cpu() for name, param in model.named_parameters() if param.grad is not None}
         # ZM 6/7/2025: for MLT, we don't add these 2 fields to the gradients dictionary
         # instead, we send a signal to tell the receiver whether we are sending them or not
+
+        # ZM 6/27/2025: this file will not consider the case where the protocol is TCP
+        # so the following logic will never be triggered
         if self.sent_eval and self.protocol == "TCP":
             gradients["eval_acc"] = self.eval_acc
             gradients["epoch"] = self.curr_epoch
 
-        # Send gradients to server and receive averaged gradients
-        self.start_time = time.perf_counter()
-        update, avg_gradients = self.send_recv(gradients)
+        # --------------- 6/27 UPDATES: bring in MLT -------------------------------
+        self.start_time = time.perf_counter()  # Start measuring network latency
+
+        # 1. send local gradients
+        self.send_gradients(gradients)
+        self.signal_counter += 1  # Increment signal counter after sending
+
+        # 2. Wait to receive the globally averaged gradients from the server
+
+        # TODO: question: should we add a logic where we wait for a signal from the server
+        # that will inform the workers
+        # "Hey I am ready to send you back the averaged gradients"?
+
+        print(f"[Worker {self.id}] Gradients sent. Waiting to receive averaged model back...")
+        socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
+        result = mlt.recv_data_mlt(socks, (self.server_host, self.tcp_port), self.signal_counter)
+        self.signal_counter += 1  # Increment signal counter after receiving
+
         self.end_time = time.perf_counter()
-        self.calc_network_latency(is_send=True)
+        self.calculate_network_latency()
 
-        if not avg_gradients:
-            raise ValueError(f"Worker {self.worker_id} failed to receive averaged gradients from server.")
+        if result is None:
+            raise ValueError(f"[Worker {self.id}] Server disconnected. Shutting down.")
 
-        if not update:
-            print(f"Worker {self.worker_id} failed to receive averaged gradients.")
-            return loss.detach()
+        averaged_gradients, _ = result
+        print(f"[Worker {self.id}] Successfully received averaged gradients.")
+
+        if averaged_gradients is None:
+            raise ValueError(f"[WORKER {self.id}] failed to receive averaged gradients back from the server")
+
+        # Send gradients to server and receive averaged gradients
+        avg_gradients = averaged_gradients
 
         # Update model parameters with averaged gradients
         # ZM 6/7/2025: that is like an extra check that we won't
@@ -186,12 +233,56 @@ class DistributedTrainer(Trainer):
         # actually what fixed the above error is to enable mps mode
         return loss.detach().to(self.device)
 
+    def send_gradients(self, gradients_dict):
+        """Sends a dictionary of gradients to the server using the mlt protocol."""
+        if not self.tcp_sock or not self.udp_sock:
+            print(f"[Worker {self.id}] Not connected. Cannot send gradients.")
+            return
+
+        print(f"[Worker {self.id}] Starting to send {len(gradients_dict)} gradients...")
+
+        if self.sent_eval:
+            self.tcp_sock.sendall(b"E")
+            self.tcp_sock.sendall(struct.pack("!f", self.eval_acc))
+            self.tcp_sock.sendall(struct.pack("!f", self.curr_epoch))
+            print(f"WORKER: Sent eval signal 'E' with data: acc={self.eval_acc}, epoch={self.curr_epoch}")
+        else:
+            self.tcp_sock.sendall(b"N")
+            print("WORKER: Sent 'no eval' signal 'N'.")
+
+        self.tcp_sock.sendall(struct.pack("!I", len(gradients_dict)))
+
+        # instead of sending each gradient one by one, we will send them all at once
+        # including the metadata
+        metadata_list: list[dict] = []
+        payload_bytes_list: list[bytes] = []
+
+        socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
+        addrs = {"udp": (self.server_host, self.dedicated_server_udp_port)}
+        addrs["tcp"] = (self.server_host, self.tcp_port)
+
+        for key, tensor in gradients_dict.items():
+            metadata, payload_bytes = mlt.serialize_gradient_to_custom_binary(self.tcp_sock, key, tensor)
+            if metadata is None or payload_bytes is None:
+                raise ValueError(f"[Worker {self.id}] Failed to serialize tensor data for key '{key}'. Either metadata or payload_bytes is None.")
+            metadata_list.append(metadata)
+            payload_bytes_list.append(payload_bytes)
+
+        # concatenate payload bytes into a single bytes object
+        all_payload_bytes = b"".join(payload_bytes_list)
+
+        success = mlt.send_data_mlt(socks, addrs, metadata_list, all_payload_bytes, self.signal_counter)
+        if not success:
+            raise ValueError(f"[Worker {self.id}] Failed to send tensor data using MLT protocol.")
+
+        print(f"[Worker {self.id}] Finished sending gradients.")
+
     def train(self, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None):
         """
         Override the train method to force training to continue when resuming
         """
         print("--------------------------------")
-        print(f"Worker {self.worker_id} starting training")
+        print(f"Worker {self.id} starting training")
         print("--------------------------------")
 
         # Get the original resume_from_checkpoint value
@@ -201,7 +292,7 @@ class DistributedTrainer(Trainer):
         is_resuming = resume_checkpoint is not None
 
         if is_resuming:
-            print(f"Worker {self.worker_id} resuming from checkpoint: {resume_checkpoint}")
+            print(f"Worker {self.id} resuming from checkpoint: {resume_checkpoint}")
 
             # Override the state to ensure we don't skip training
             self.state.global_step = 0
@@ -221,24 +312,16 @@ class DistributedTrainer(Trainer):
 
         # Call the parent's train method with our adjusted settings
         # This will still load the checkpoint state but won't skip training
-        result = super().train(resume_from_checkpoint=resume_checkpoint, trial=trial, ignore_keys_for_eval=ignore_keys_for_eval)
+        result = super().train(
+            resume_from_checkpoint=resume_checkpoint,
+            trial=trial,
+            ignore_keys_for_eval=ignore_keys_for_eval,
+        )
 
-        print(f"Worker {self.worker_id} training completed successfully")
+        print(f"Worker {self.id} training completed successfully")
         self.print_total_network_latency()
 
         return result
-
-    def calc_network_latency(self, is_send):
-        self.network_latency_list.append(self.end_time - self.start_time)
-        if is_send:
-            print(f"Send Network latency: {self.end_time - self.start_time}")
-        else:
-            print(f"Recv Network latency: {self.end_time - self.start_time}")
-        self.start_time = 0
-        self.end_time = 0
-
-    def print_total_network_latency(self):
-        print(f"Total network latency for worker {self.worker_id}: {sum(self.network_latency_list)}")
 
     def get_eval_dataloader(self, eval_dataset=None):
         """
