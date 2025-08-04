@@ -1,6 +1,7 @@
 import socket
 import struct
 import time
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -41,7 +42,7 @@ class DistributedTrainerMultithreading(Trainer):
         self.protocol = kwargs.pop("protocol", "MLT")
         self.loss_tolerance = kwargs.pop("loss_tolerance", 0.03)
         self.signal_counter = 0  # Initialize signal counter for MLT protocol
-        
+
         # network latency measurement
         self.start_time = 0
         self.end_time = 0
@@ -49,17 +50,17 @@ class DistributedTrainerMultithreading(Trainer):
 
         # Initialize parent class with remaining arguments
         super().__init__(*args, **kwargs)
-        
+
     def calculate_network_latency(self):
         """
         Calculate the network latency based on the start and end times.
         """
 
-        latency = (self.end_time - self.start_time)
+        latency = self.end_time - self.start_time
         self.network_latency_list.append(latency)
-        
+
         print(f"[Worker {self.id}] (W->S->W) Network latency: {latency:.6f} seconds")
-    
+
     def print_total_network_latency(self):
         """
         Print the total network latency for all operations.
@@ -189,7 +190,7 @@ class DistributedTrainerMultithreading(Trainer):
 
         # --------------- 6/27 UPDATES: bring in MLT -------------------------------
         self.start_time = time.perf_counter()  # Start measuring network latency
-        
+
         # 1. send local gradients
         self.send_gradients(gradients)
         self.signal_counter += 1  # Increment signal counter after sending
@@ -207,7 +208,7 @@ class DistributedTrainerMultithreading(Trainer):
 
         self.end_time = time.perf_counter()
         self.calculate_network_latency()
-        
+
         if result is None:
             raise ValueError(f"[Worker {self.id}] Server disconnected. Shutting down.")
 
@@ -250,7 +251,7 @@ class DistributedTrainerMultithreading(Trainer):
             print("WORKER: Sent 'no eval' signal 'N'.")
 
         self.tcp_sock.sendall(struct.pack("!I", len(gradients_dict)))
-        
+
         # instead of sending each gradient one by one, we will send them all at once
         # including the metadata
         metadata_list: list[dict] = []
@@ -263,19 +264,17 @@ class DistributedTrainerMultithreading(Trainer):
         for key, tensor in gradients_dict.items():
             metadata, payload_bytes = mlt.serialize_gradient_to_custom_binary(self.tcp_sock, key, tensor)
             if metadata is None or payload_bytes is None:
-                raise ValueError(
-                    f"[Worker {self.id}] Failed to serialize tensor data for key '{key}'. Either metadata or payload_bytes is None."
-                )
+                raise ValueError(f"[Worker {self.id}] Failed to serialize tensor data for key '{key}'. Either metadata or payload_bytes is None.")
             metadata_list.append(metadata)
             payload_bytes_list.append(payload_bytes)
-            
+
         # concatenate payload bytes into a single bytes object
-        all_payload_bytes = b''.join(payload_bytes_list)
+        all_payload_bytes = b"".join(payload_bytes_list)
 
         success = mlt.send_data_mlt(socks, addrs, metadata_list, all_payload_bytes, self.signal_counter)
         if not success:
             raise ValueError(f"[Worker {self.id}] Failed to send tensor data using MLT protocol.")
-        
+
         print(f"[Worker {self.id}] Finished sending gradients.")
 
     def train(self, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None):

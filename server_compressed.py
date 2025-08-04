@@ -8,7 +8,6 @@ from enum import Enum
 import torch
 
 import config
-import mlt
 
 
 class TrainingPhase(Enum):

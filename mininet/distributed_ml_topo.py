@@ -1,6 +1,6 @@
+import datetime
 import os
 import time
-import datetime
 
 from mininet.link import TCLink
 from mininet.log import info, setLogLevel
@@ -33,8 +33,8 @@ class WorkerServerTopo(Topo):
         s1 = self.addSwitch("s1")
 
         # Define link characteristics
-        link_opts_base = dict(bw=1000, delay="1ms", loss=1, max_queue_size=1000, use_htb=True)
-        link_opts_server = dict(bw=1000, delay="1ms", loss=1, max_queue_size=1000, use_htb=True)
+        link_opts_base = dict(bw=1000, delay="1ms", loss=0.1, max_queue_size=1000, use_htb=True)
+        link_opts_server = dict(bw=1000, delay="1ms", loss=0.1, max_queue_size=1000, use_htb=True)
 
         info("*** Adding Worker Links with Loss:\n")
         info(f"* Worker i <-> Switch: {link_opts_base}\n")
@@ -103,7 +103,7 @@ def run_experiment():
     info(f"*** Creating log directory '{LOG_DIR_BASE}' on nodes...\n")
     for node in [server_node, worker0_node, worker1_node, worker2_node]:
         # Optional: Ensure the project directory exists if needed by scripts
-        node.cmd(f'mkdir -p {PROJECT_DIR}') # Uncomment if scripts expect it
+        node.cmd(f"mkdir -p {PROJECT_DIR}")  # Uncomment if scripts expect it
         node.cmd(f"mkdir -p {LOG_DIR_BASE}")
 
     # --- Start the distributed ML applications ---

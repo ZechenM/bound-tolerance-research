@@ -3,52 +3,14 @@ import select
 import socket
 import struct
 import traceback
-import utility
+
 # import pickle
 import numpy as np
 import torch
 
 import config
+import utility
 from config import STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE
-
-# # --- Helper Functions ---
-# def _recv_with_retry(sock: socket.socket, size: int, retries: int = 5) -> bytes | None:
-#     sock.settimeout(1.0)  # Set a timeout for the receive operation
-#     for attempt in range(retries):
-#         try:
-#             data = _recv_all(sock, size)
-#             if data is not None:
-#                 return data
-#         except socket.timeout:
-#             print(f"Socket timeout occurred on attempt {attempt}. Retrying...")
-#             if attempt == retries - 1:
-#                 raise TimeoutError("Max retries reached. Giving up.")
-#             time.sleep(1)  # Wait before retrying
-#         except Exception as e:
-#             raise RuntimeError(f"Error on attempt {attempt}: {e}")
-#     return None
-
-# TODO: timeout might also be 0.001 or 0.01 if we don't wany to stall the program that much
-def _flush_recv_buffer(sock: socket.socket, timeout=0.1):
-    all_data = b""
-    
-    while True:
-        ready_to_read, _, _ = select.select([sock], [], [], timeout)
-        if not ready_to_read:
-            break
-        
-        try:
-            data = sock.recv(1024)
-            if not data:
-                print("Connection closed by the sender.")
-                break
-            all_data += data
-        except socket.error as e:
-            print(f"Error while flushing receive buffer: {e}")
-            break
-
-    return all_data
-
 
 
 def _recv_all(conn: socket.socket, size: int, recv_lock=None) -> bytes | None:
@@ -98,7 +60,7 @@ def _check_if_told_to_stop(sock: socket.socket, expected_counter: int, server_ac
             print(f"MLT: Warning - Received counter {received_counter} does not match expected counter {expected_counter}.")
             return False, None
         if not signal:  # Connection closed
-            raise ConnectionError("SENDER MLT: Connection closed by receiver during early check.")
+            raise ConnectionError("MLT HELPER: Connection closed by receiver during early check.")
         if signal == b"S":
             print("MLT HELPER: Received early 'Stop' (S) from server. Transmission for this gradient complete.")
             return True, None
@@ -109,16 +71,16 @@ def _check_if_told_to_stop(sock: socket.socket, expected_counter: int, server_ac
             new_bitmap_data = utility.recv_all(sock, bitmap_len_to_recv)
 
             if not new_bitmap_data or len(new_bitmap_data) != bitmap_len_to_recv:
-                raise ConnectionError("SENDER MLT ERROR: Failed to receive complete bitmap data from server.")
+                raise ConnectionError("MLT HELPER ERROR: Failed to receive complete bitmap data from server.")
 
             if bytearray(new_bitmap_data) == server_ack_bitmap and len(new_bitmap_data) > 0:
-                print("SENDER MLT: No change in bitmap. Warning: Progress stalled.")
+                print("MLT HELPER: No change in bitmap. Warning: Progress stalled.")
 
             server_ack_bitmap = bytearray(new_bitmap_data)
-            
+
             return False, server_ack_bitmap  # Continue sending data
         else:
-            # This is unexpected if server only sends S/B in response to P.
+            # This is unexpected if sender only sends S/B in response to P.
             # Could log or handle as an error. For now, we might proceed,
             # but it could indicate a de-sync.
             print(f"MLT: Warning - Unexpected TCP data '{signal}' during early check. Proceeding with caution.")
@@ -143,7 +105,7 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
     shape = tensor.shape
     tensor_numpy = tensor.cpu().numpy()
     tensor_data_bytes = tensor_numpy.tobytes()
-    
+
     metadata = {
         "key": key,
         "shape": shape,
@@ -163,6 +125,8 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
     tcp_host, tcp_port = addrs["tcp"]
     udp_host, udp_port = addrs["udp"]
 
+    bitmap_same_from_last_round = False
+
     chunks = _chunk_data(gradient_payload_bytes)
     num_chunks = len(chunks)
     if num_chunks == 0:
@@ -175,113 +139,119 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
         # Send metadata first
         # utility.send_signal_tcp(tcp_sock, b"M")  # M for Metadata
         utility.send_data_tcp(tcp_sock, metadata)
-        
+
         if config.DEBUG:
             print(f"SENDER MLT: Metadata sent with {num_chunks} chunks.")
 
         server_ack_bitmap = bytearray((num_chunks + 7) // 8)
-        max_retries_no_progress = 3
+        max_retries_no_progress = 10
         no_progress_rounds = 0
 
         # -------------- UDP Phase: Send Chunks --------------
         while True:
-            # --- Phase 1: Opportunistic check for early "Stop" from server ---
-            # This is useful if server wants to terminate this stream early.
-            # Using a very short timeout for a non-blocking check.
-
-            # TODO: move it into the for loop b/c STOP signal can happen at any time
-            # do it a couple of more times: before for loop, at the beginning of the for loop, and at the end of the for loop
-            # and after for loop
-            # TODO NEEDS RECONSIDERATION
-            # cond, new_bitmap = _check_if_told_to_stop(tcp_sock, signal_counter, server_ack_bitmap)
-            # if cond:
-            #     if config.DEBUG:
-            #         print("SENDER MLT: 'Stop' signal received at the beginning of while loop. Transmission COMPLETED.")
-            #         print("SENDER MLT: Have not sent any UDP chunks this round")
-            #     return True
-            # else:
-            #     if new_bitmap is not None:
-            #         server_ack_bitmap = new_bitmap
-                
+            # --- (Deprecated) Phase 1: Opportunistic check for early "Stop" from server ---
 
             # --- Phase 2: Send/Resend UDP chunks based on server_ack_bitmap ---
             chunks_sent_this_round = 0
-            for i in range(num_chunks):
-                # check stop signal has arrived or not
-                cond, new_bitmap = _check_if_told_to_stop(tcp_sock, signal_counter, server_ack_bitmap)
-                if cond:
-                    if config.DEBUG:
-                        print("SENDER MLT: 'Stop' signal received at the beginning of for loop. Transmission COMPLETED.")
-                        print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round")
-                    return True
-                else:
-                    if new_bitmap is not None:
-                        server_ack_bitmap = new_bitmap
 
-                byte_idx, bit_idx = divmod(i, 8)
-                # Check if the i-th bit in server_ack_bitmap is 0 (server hasn't acked it)
-                if not ((server_ack_bitmap[byte_idx] >> bit_idx) & 1):
-                    chunk_payload = chunks[i]
-                    # Header: chunk_id (0-indexed), total_chunks, payload_length_of_this_chunk
-                    header = struct.pack("!III", i, num_chunks, len(chunk_payload))
-                    packet_to_send = header + chunk_payload
-                    try:
-                        udp_sock.sendto(
-                            (packet_to_send),
-                            (udp_host, udp_port),
-                        )
-                        chunks_sent_this_round += 1
+            # ZM on 8.3.2025 Dramatic Change: will not do the for loop thing if previous round has the same bitmap
+            if bitmap_same_from_last_round:
+                if config.DEBUG:
+                    print("SENDER MLT: Skipping chunk sending loop due to same bitmap from last round.")
+            else:
+                for i in range(num_chunks):
+                    # ZM on 8.3.2025: I think even once of this signal checking over 2000+ chunks just for 1 communication is too much
+                    # As a result, I want to see if checking it every 100 chunks is enough
+                    if i % 100 == 0:  # Check every 100 chunks
+                        # Check if the sender has sent a 'Stop' (S) or 'Bitmap' (B) signal
+                        if config.DEBUG:
+                            print(f"SENDER MLT: Checking for 'Stop' signal at chunk {i}/{num_chunks}.")
+                        cond, new_bitmap = _check_if_told_to_stop(tcp_sock, signal_counter, server_ack_bitmap)
+                        if cond:
+                            if config.DEBUG:
+                                print("SENDER MLT: 'Stop' signal received at the beginning of for loop. Transmission COMPLETED.")
+                                print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round")
+                            return True
+                        else:
+                            if new_bitmap is not None and new_bitmap != server_ack_bitmap:
+                                server_ack_bitmap = new_bitmap
 
-                    except Exception as e:
-                        # Log UDP send error but continue; rely on bitmap retransmission
-                        print(f"SENDER MLT: UDP sendto error for chunk {i}: {e}")
-                    
-                    if config.DEBUG:
-                        now = datetime.datetime.now()
-                        time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
-                        print(f"SENDER MLT: Sent chunk {i}/{num_chunks} via UDP at {time_with_ms}.")
+                    byte_idx, bit_idx = divmod(i, 8)
+                    # Check if the i-th bit in server_ack_bitmap is 0 (server hasn't acked it)
+                    if not ((server_ack_bitmap[byte_idx] >> bit_idx) & 1):
+                        chunk_payload = chunks[i]
+                        # Header: chunk_id (0-indexed), total_chunks, payload_length_of_this_chunk
+                        header = struct.pack("!III", i, num_chunks, len(chunk_payload))
+                        packet_to_send = header + chunk_payload
+                        try:
+                            udp_sock.sendto(
+                                (packet_to_send),
+                                (udp_host, udp_port),
+                            )
+                            chunks_sent_this_round += 1
 
-                cond, new_bitmap = _check_if_told_to_stop(tcp_sock, signal_counter, server_ack_bitmap)
-                if cond:
-                    if config.DEBUG:
-                        print("SENDER MLT: 'Stop' signal received at the end of for loop. Transmission COMPLETED")
-                        print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round")
-                    return True
-                else:
-                    if new_bitmap is not None:
-                        server_ack_bitmap = new_bitmap
+                        except Exception as e:
+                            # Log UDP send error but continue; rely on bitmap retransmission
+                            print(f"SENDER MLT: UDP sendto error for chunk {i}: {e}")
+
+                        if config.DEBUG:
+                            now = datetime.datetime.now()
+                            time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
+                            print(f"SENDER MLT: Sent chunk {i}/{num_chunks} via UDP at {time_with_ms}.")
+
+                    # ZM 8.3.2025: I think doing this twice in the for loop has too much overhead.
+                    # cond, new_bitmap = _check_if_told_to_stop(tcp_sock, signal_counter, server_ack_bitmap)
+                    # if cond:
+                    #     if config.DEBUG:
+                    #         print("SENDER MLT: 'Stop' signal received at the end of for loop. Transmission COMPLETED")
+                    #         print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round")
+                    #     return True
+                    # else:
+                    #     if new_bitmap is not None and new_bitmap != server_ack_bitmap:
+                    #         server_ack_bitmap = new_bitmap
 
             # --- Phase 3: Send "Probe" (P) signal via TCP ---
-            # Send 'Probe' (P) and wait for 'Stop' (S) or 'Bitmap' (B)
-            if config.DEBUG:
-                # Get the current time object
-                now = datetime.datetime.now()
+            while True:
+                # Send 'Probe' (P) and wait for 'Stop' (S) or 'Bitmap' (B)
+                if config.DEBUG:
+                    # Get the current time object
+                    now = datetime.datetime.now()
 
-                # Format using an f-string, calculating milliseconds from microseconds
-                time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
-                print(f"SENDER MLT: Sending 'Probe' (P) via TCP at {time_with_ms}.")
-            try:
-                utility.send_signal_tcp(tcp_sock, b"P", signal_counter)
-            except Exception as e:
-                raise ConnectionError(f"SENDER MLT ERROR: Failed to send 'Probe' (P) signal: {e}")
+                    # Format using an f-string, calculating milliseconds from microseconds
+                    time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
+                    print(f"SENDER MLT: Sending 'Probe' (P) via TCP at {time_with_ms}.")
+                try:
+                    utility.send_signal_tcp(tcp_sock, b"P", signal_counter)
+                except Exception as e:
+                    raise ConnectionError(f"SENDER MLT ERROR: Failed to send 'Probe' (P) signal: {e}")
+
+                # Use select with a reasonable timeout for the server to respond
+                probe_cnt = 0
+                probe_response_timeout = 0.01  # seconds
+                ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
+
+                while not ready_to_read:
+                    now = datetime.datetime.now()
+                    if probe_cnt > 10:  # Arbitrary limit to avoid infinite loop
+                        print(f"SENDER MLT: No response from server after 'Probe' (P) after {probe_cnt} attempts. Will re-Probe.")
+                        break
+
+                    if config.DEBUG:
+                        time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
+                        print(f"SENDER MLT: No response from server after 'Probe' (P) at {time_with_ms} ({probe_cnt} / 10). Retrying...")
+
+                    probe_cnt += 1
+                    ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
+
+                if ready_to_read:
+                    # If the server responds, we can break out of the loop
+                    if config.DEBUG:
+                        print("SENDER MLT: Server responded to 'Probe' (P).")
+                    break
 
             #  --- Phase 4: Receive server's response (S or B + bitmap) ---
-            if config.DEBUG:
-                print("SENDER MLT: Waiting for server response after 'Probe' (P).")
-
-            # Use select with a reasonable timeout for the server to respond
-            probe_response_timeout = 0.001  # seconds
-            ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
-
-            if not ready_to_read:
-                print(f"SENDER MLT: Timeout ({probe_response_timeout}s) waiting for server response to 'Probe'.")
-                no_progress_rounds += 1
-                if no_progress_rounds >= max_retries_no_progress:
-                    # print("SENDER MLT: Max retries with no progress reached. Aborting.")
-                    # return False
-                    print(f"SENDER MLT: Retried {no_progress_rounds} times")
-                continue  # Retry by sending probe again after resending unacked chunks
-
+            # reset bitmap_same_from_last_round to False
+            bitmap_same_from_last_round = False
             signal, received_counter = utility.recv_signal_tcp(tcp_sock)
             if not signal:
                 raise ConnectionError("SENDER MLT ERROR: Connection closed by receiver while waiting for response.")
@@ -289,9 +259,7 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
             # CRITICAL CHANGE: Check if the received counter matches the expected signal_counter
             while received_counter != signal_counter:
                 print(f"SENDER MLT: Received {signal} signal with counter {received_counter}. Expected: {signal_counter}. Retrying...")
-                # If we receive a 'Probe' (P), we should resend unacked chunks
                 signal, received_counter = utility.recv_signal_tcp(tcp_sock)
-
 
             if signal == b"S":
                 print("SENDER MLT: Received 'Stop' (S). Transfer complete.")
@@ -305,19 +273,21 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
                 if not new_bitmap_data or len(new_bitmap_data) != bitmap_len_to_recv:
                     raise ConnectionError("SENDER MLT ERROR: Failed to receive complete bitmap data from server.")
 
-                if bytearray(new_bitmap_data) == server_ack_bitmap and chunks_sent_this_round > 0:
+                if bytearray(new_bitmap_data) == server_ack_bitmap:
+                    bitmap_same_from_last_round = True
                     no_progress_rounds += 1
                     print(f"SENDER MLT: No change in bitmap. Progress stalled ({no_progress_rounds}/{max_retries_no_progress}).")
+
+                    if no_progress_rounds > max_retries_no_progress:
+                        # to prevent deadlock
+                        print("SENDER MLT: Max retries with no progress reached. Will retransmit UDP chunks.")
+                        bitmap_same_from_last_round = False
+                        no_progress_rounds = 0
                 else:
                     no_progress_rounds = 0
 
                 server_ack_bitmap = bytearray(new_bitmap_data)
 
-                if no_progress_rounds >= max_retries_no_progress:
-                    # print("SENDER MLT ERROR: Max retries with no progress reached. Aborting.")
-                    # return False
-                    pass
-                    
             else:
                 print(f"SENDER MLT ERROR: Unrecognized signal '{signal}' from receiver.")
                 return False
@@ -384,15 +354,15 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
 
     metadata_list = utility.receive_data_tcp(tcp_sock)
     num_chunks = metadata_list.pop()  # Last element is the number of chunks
-    
+
     if len(metadata_list) != num_subgradients:
         raise ValueError(f"[Worker {tcp_addr}] RECEIVER ERROR: Expected {num_subgradients} metadata entries, but got {len(metadata_list)}.")
-    
+
     # prepare to receive UDP chunks
     received_chunks = [None] * num_chunks
     bitmap = bytearray((num_chunks + 7) // 8)
     expected_packet_size = config.CHUNK_SIZE + 12  # 12-byte header
-    
+
     has_stopped = False
     udp_recv_counter = 0
     while None in received_chunks:
@@ -405,11 +375,11 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
             #     if config.DEBUG:
             #         print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received in this round. Continuing to wait at {time_with_ms}...")
             #     continue
-            
+
             # if udp_sock not in readable:
             #     if config.DEBUG:
             #         print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received on UDP socket. Continuing to wait at {time_with_ms}...")
-            
+
             # if tcp_sock not in readable:
             #     if config.DEBUG:
             #         print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received on TCP socket. Continuing to wait at {time_with_ms}...")
@@ -421,13 +391,15 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
                 now = datetime.datetime.now()
                 time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
                 if config.DEBUG:
-                    print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}) at {time_with_ms}.")
+                    print(
+                        f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}) at {time_with_ms}."
+                    )
                     udp_recv_counter += 1
                 if len(packet) < 12:
                     udp_recv_counter -= 1  # Ignore this packet, it is too small
                     print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Packet too small: {len(packet)} bytes. Ignoring.")
                     continue
-                
+
                 # Unpick the packet
                 # ZM 7.20 no need to pickle/unpickle b/c pickle will increase the packet size here
                 # packet = pickle.loads(packet)
@@ -447,21 +419,23 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
                     # Send the stop signal
                     utility.send_signal_tcp(tcp_sock, b"S", expected_counter)
                     break
-            
+
             # CRITICAL CHANGE FOR SIGNAL HANDLING
             if tcp_sock in readable:
                 if config.DEBUG:
                     print(f"[Worker {tcp_addr}] RECEIVER MLT(TCP): TCP socket is readable. Waiting for signal from sender at {time_with_ms}...")
                 signal, received_counter = utility.recv_signal_tcp(tcp_sock)
-                
+
                 if not signal:
                     raise ValueError(f"[Worker {tcp_addr}] RECEIVER ERROR: Failed to receive signal from TCP socket.")
-                
+
                 while received_counter != expected_counter:
-                    print(f"[Worker {tcp_addr}] RECEIVER MLT: Received {signal} signal with counter {received_counter}. Expected: {expected_counter}. Retrying...")
+                    print(
+                        f"[Worker {tcp_addr}] RECEIVER MLT: Received {signal} signal with counter {received_counter}. Expected: {expected_counter}. Retrying..."
+                    )
                     # If we receive a 'Probe' (P), we should resend unacked chunks
                     signal, received_counter = utility.recv_signal_tcp(tcp_sock)
-                
+
                 if signal == b"P":
                     # Get the current time object
                     now = datetime.datetime.now()
@@ -469,18 +443,15 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
                     # Format using an f-string, calculating milliseconds from microseconds
                     time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
                     if config.DEBUG:
-                        print(f"[Worker {tcp_addr}] RECEIVER MLT: Received 'Probe' (P) signal with counter {received_counter} from sender at {time_with_ms}.")
+                        print(
+                            f"[Worker {tcp_addr}] RECEIVER MLT: Received 'Probe' (P) signal with counter {received_counter} from sender at {time_with_ms}."
+                        )
 
-                    if num_chunks > 0 and (received_chunks.count(None) / num_chunks) <= config.loss_tolerance:
+                    if (received_chunks.count(None) / num_chunks) <= config.loss_tolerance:
                         if config.DEBUG:
                             print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
                         has_stopped = True
-                        
-                        # # flush the tcp receive buffer to avoid any stale data
-                        # data = _flush_recv_buffer(tcp_sock, timeout=0.1)
-                        # if config.DEBUG and data:
-                        #     print(f"[Worker {tcp_addr}] RECEIVER MLT: Flushed TCP buffer right before STOP signal sent out and got: {data}")
-                        # send the stop signal
+
                         utility.send_signal_tcp(tcp_sock, b"S", received_counter)
                         break
                     else:
@@ -500,7 +471,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
         except Exception as e:
             print(f"[Worker {tcp_addr}] RECEIVER MLT: Unexpected error occurred: {e}")
             return None
-            
+
     if not has_stopped:
         if config.DEBUG:
             print("RECEIVER MLT: got out of chunk send/recv loop but had not sent STOP signal yet.")
@@ -519,14 +490,14 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
             # which could be smaller than config.CHUNK_SIZE
             # but our tensor reconstruction logic will handle that
             received_chunks[i] = b"\x00" * config.CHUNK_SIZE  # Fill missing chunks with empty bytes
-    
-    concatenated_data = b"".join(received_chunks) 
+
+    concatenated_data = b"".join(received_chunks)
     cursor = 0
-    
+
     for metadata in metadata_list:
         if not isinstance(metadata, dict):
             raise ValueError(f"[Worker {tcp_addr}] RECEIVER ERROR: Metadata must be a dictionary. Got {type(metadata)}.")
-        
+
         key = metadata.get("key")
         shape = metadata.get("shape")
         tensor_data_len_expected = metadata.get("tensor_data_len")
@@ -537,22 +508,20 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
             raise ValueError(f"[Worker {tcp_addr}] RECEIVER ERROR: Expected tensor data length is None for key '{key}'.")
         if key is None:
             raise ValueError(f"[Worker {tcp_addr}] RECEIVER ERROR: Key is None in metadata for tensor reconstruction.")
-        
+
         reconstructed_tensor = torch.zeros(shape, dtype=torch_dtype)
-        
+
         if tensor_data_len_expected > 0:
             tensor_data = concatenated_data[cursor : cursor + tensor_data_len_expected]
-            
+
             # Convert bytes to numpy array and then to torch tensor
             numpy_array = np.frombuffer(tensor_data, dtype=numpy_dtype)
-            reconstructed_tensor = (
-                torch.from_numpy(numpy_array.copy()).reshape(shape).to(torch_dtype)
-            )
+            reconstructed_tensor = torch.from_numpy(numpy_array.copy()).reshape(shape).to(torch_dtype)
             cursor += tensor_data_len_expected
-        
+
         final_gradients_dict[key] = reconstructed_tensor
 
         if config.DEBUG:
             print(f"[Worker {tcp_addr}] RECONSTRUCTION: Success for key '{key}'.")
-    
+
     return final_gradients_dict, udp_addr

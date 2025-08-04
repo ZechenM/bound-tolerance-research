@@ -167,14 +167,14 @@ class Server:
                             if all(self.has_eval_acc.values()):
                                 print(f"[{tcp_addr}] All workers have reported eval accuracy.")
                                 self._training_phase_update()
-                                
+
                                 if self.training_phase == TrainingPhase.BEGIN:
                                     self.drop_rate = config.BEGIN_DROP
                                 elif self.training_phase == TrainingPhase.MID:
                                     self.drop_rate = config.MID_DROP
                                 elif self.training_phase == TrainingPhase.FINAL:
                                     self.drop_rate = config.FINAL_DROP
-                                
+
                                 print(f"[{tcp_addr}] Updated drop rate: {self.drop_rate}")
                         # ---------- logic for training phase update ENDS -----------
 
@@ -184,7 +184,6 @@ class Server:
                         if len(self.received_gradients) == self.num_workers:
                             print(f"[{tcp_addr}] Final gradient received. Notifying aggregator.")
                             self.is_buffer_full.notify()
-
 
                 # --- ROUND-TRIP LOGIC: Wait for aggregation and send back ---
                 print(f"[{tcp_addr}] Waiting for aggregation to complete...")
@@ -231,7 +230,7 @@ class Server:
 
         metadata_list = []
         payload_bytes_list = []
-        
+
         for key, tensor in avg_gradients.items():
             if not isinstance(tensor, torch.Tensor):
                 print(f"Warning: Item with key '{key}' is not a tensor, skipping.")
@@ -240,14 +239,12 @@ class Server:
 
             metadata, payload_bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)
             if metadata is None or payload_bytes is None:
-                raise ValueError(
-                    f"Failed to serialize tensor data for key '{key}'. Either metadata or payload_bytes is None."
-                )
+                raise ValueError(f"Failed to serialize tensor data for key '{key}'. Either metadata or payload_bytes is None.")
             metadata_list.append(metadata)
             payload_bytes_list.append(payload_bytes)
-            
+
         # concatenate payload bytes into a single bytes object
-        all_payload_bytes = b''.join(payload_bytes_list)
+        all_payload_bytes = b"".join(payload_bytes_list)
         success = mlt.send_data_mlt(socks, addrs, metadata_list, all_payload_bytes, signal_counter)
         if not success:
             raise ValueError(f"SERVER ERROR: Failed to send tensor data for key '{key}' using MLT. Aborting.")

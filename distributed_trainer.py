@@ -2,11 +2,11 @@ import pickle
 import socket
 import struct
 import time
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import Trainer
-
 
 
 def custom_collate_fn(batch):
@@ -166,7 +166,7 @@ class DistributedTrainer(Trainer):
         update, avg_gradients = self.send_recv(gradients)
         self.end_time = time.perf_counter()
         self.calc_network_latency(is_send=True)
-        
+
         if not avg_gradients:
             raise ValueError(f"Worker {self.worker_id} failed to receive averaged gradients from server.")
 

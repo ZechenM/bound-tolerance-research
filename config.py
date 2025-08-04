@@ -76,4 +76,4 @@ FINAL_DROP = 0.0
 TCP_MAX_RETRIES = 3  # Maximum number of retries for TCP connections
 
 # config 10: timeout
-probe_response_timeout = 0.001 # Timeout for probe responses in seconds
+probe_response_timeout = 0.001  # Timeout for probe responses in seconds
