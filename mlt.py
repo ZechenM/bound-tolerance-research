@@ -3,6 +3,7 @@ import select
 import socket
 import struct
 import traceback
+import time
 
 # import pickle
 import numpy as np
@@ -10,7 +11,7 @@ import torch
 
 import config
 import utility
-from config import STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE
+from config import STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE, UDP_RATE
 
 
 def _recv_all(conn: socket.socket, size: int, recv_lock=None) -> bytes | None:
@@ -92,6 +93,75 @@ def _check_if_told_to_stop(
 
     return False, None  # No signal received, continue sending data
 
+def _count_bits(bitmap_data):
+    """
+    Count the number of 0's and 1's in a bitmap (bytes object).
+    Returns: (count_0, count_1)
+    """
+    count_0 = 0
+    count_1 = 0
+
+    for byte in bitmap_data:
+        # Convert byte to 8-bit binary string (e.g., '01011010')
+        bits = bin(byte)[2:].zfill(8)  # [2:] removes '0b' prefix; zfill pads to 8 bits
+        for bit in bits:
+            if bit == '0':
+                count_0 += 1
+            elif bit == '1':
+                count_1 += 1
+
+    return count_0, count_1
+
+
+def _change_UDP_rate(update_rate):
+    """ 
+    Update UDP rate to <update_rate>
+    """
+    global UDP_RATE
+    UDP_RATE = update_rate
+
+
+# Global tracking
+_BYTES_SENT_THIS_SECOND = 0
+_CURRENT_SECOND = int(time.time())
+def _UDP_send_rate_control(udp_sock, packet_to_send, udp_host, udp_port):
+    """
+    A wrapper to UDP send function to add rate(flow) control
+    """
+    global _BYTES_SENT_THIS_SECOND, _CURRENT_SECOND, UDP_RATE
+
+    packet_size_bytes = len(packet_to_send)
+    max_bytes_per_second = UDP_RATE * 1024 * 1024 // 8  # 100 Mbps → 12,500,000 bytes/sec
+
+    while packet_size_bytes > 0:
+        now = int(time.time())
+        
+        # Reset counter if we're in a new second
+        if now != _CURRENT_SECOND:
+            _BYTES_SENT_THIS_SECOND = 0
+            _CURRENT_SECOND = now
+
+        # Calculate remaining allowance for this second
+        remaining_bytes = max_bytes_per_second - _BYTES_SENT_THIS_SECOND
+        
+        # If we've hit the limit, sleep until next second
+        if remaining_bytes <= 0:
+            time.sleep(1.0 - (time.time() - now))
+            continue
+
+        # Send only up to the remaining allowance
+        chunk_size = min(packet_size_bytes, remaining_bytes)
+        udp_sock.sendto(packet_to_send[:chunk_size], (udp_host, udp_port))
+        
+        # Update tracking
+        packet_to_send = packet_to_send[chunk_size:]
+        packet_size_bytes -= chunk_size
+        _BYTES_SENT_THIS_SECOND += chunk_size
+
+        # Throttle if we just hit the limit
+        if _BYTES_SENT_THIS_SECOND >= max_bytes_per_second:
+            time.sleep(1.0 - (time.time() - now))
+
 
 # --- Serialization Function ---
 def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tensor: torch.Tensor):
@@ -172,10 +242,11 @@ def send_data_mlt(
                         header = struct.pack("!III", i, signal_counter, len(chunk_payload))
                         packet_to_send = header + chunk_payload
                         try:
-                            udp_sock.sendto(
-                                (packet_to_send),
-                                (udp_host, udp_port),
-                            )
+                            # udp_sock.sendto(
+                            #     (packet_to_send),
+                            #     (udp_host, udp_port),
+                            # )
+                            _UDP_send_rate_control(udp_sock, packet_to_send, udp_host, udp_port)
                             chunks_sent_this_round += 1
 
                         except Exception as e:
@@ -266,6 +337,10 @@ def send_data_mlt(
 
                 bitmap_len_to_recv = len(server_ack_bitmap)
                 new_bitmap_data = utility.recv_all(tcp_sock, bitmap_len_to_recv)
+
+                if config.DEBUG: 
+                    zero_count, one_count = _count_bits(new_bitmap_data)
+                    print(f"SENDER MLT DEBUG: server request to resend {zero_count}/{zero_count + one_count} packets")
 
                 if not new_bitmap_data or len(new_bitmap_data) != bitmap_len_to_recv:
                     raise ConnectionError("SENDER MLT ERROR: Failed to receive complete bitmap data from server.")
