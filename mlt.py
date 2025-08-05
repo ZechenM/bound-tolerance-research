@@ -2,6 +2,7 @@ import datetime
 import select
 import socket
 import struct
+import time
 import traceback
 
 # import pickle
@@ -11,6 +12,10 @@ import torch
 import config
 import utility
 from config import STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE
+
+# Import TIMELY controller if enabled
+if config.ENABLE_TIMELY:
+    from timely import TimelyController
 
 
 def _recv_all(conn: socket.socket, size: int, recv_lock=None) -> bytes | None:
@@ -118,6 +123,7 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
 def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_bytes: bytes, signal_counter: int) -> bool:
     """
     Sends gradient data bytes using the MLT protocol (UDP with TCP-based ACK/retransmission).
+    Now enhanced with TIMELY congestion control for adaptive rate limiting.
     Returns True on success, False on failure.
     """
     tcp_sock = socks["tcp"]
@@ -131,6 +137,22 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
     num_chunks = len(chunks)
     if num_chunks == 0:
         raise ValueError("SENDER MLT: No chunks to send. Exiting.")
+
+    # Initialize TIMELY controller if enabled
+    timely_controller = None
+    if config.ENABLE_TIMELY:
+        timely_controller = TimelyController(
+            initial_rate_mbps=config.TIMELY_INITIAL_RATE_MBPS,
+            target_rtt_ms=config.TIMELY_TARGET_RTT_MS,
+            max_rate_mbps=config.TIMELY_MAX_RATE_MBPS,
+            min_rate_mbps=config.TIMELY_MIN_RATE_MBPS,
+            alpha=config.TIMELY_ALPHA,
+            beta=config.TIMELY_BETA,
+            additive_increase_mbps=config.TIMELY_ADDITIVE_INCREASE_MBPS,
+            rtt_threshold_factor=config.TIMELY_RTT_THRESHOLD_FACTOR,
+        )
+        if config.DEBUG:
+            print(f"SENDER MLT: TIMELY congestion control enabled with initial rate {config.TIMELY_INITIAL_RATE_MBPS} Mbps")
 
     try:
         metadata.append(num_chunks)
@@ -159,6 +181,11 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
                 if config.DEBUG:
                     print("SENDER MLT: Skipping chunk sending loop due to same bitmap from last round.")
             else:
+                # Start RTT measurement for this round if TIMELY is enabled
+                round_start_time = None
+                if timely_controller:
+                    round_start_time = timely_controller.start_measurement()
+
                 for i in range(num_chunks):
                     # ZM on 8.3.2025: I think even once of this signal checking over 2000+ chunks just for 1 communication is too much
                     # As a result, I want to see if checking it every 100 chunks is enough
@@ -183,6 +210,13 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
                         # Header: chunk_id (0-indexed), total_chunks, payload_length_of_this_chunk
                         header = struct.pack("!III", i, num_chunks, len(chunk_payload))
                         packet_to_send = header + chunk_payload
+                        
+                        # Apply TIMELY rate limiting if enabled
+                        if timely_controller:
+                            send_delay = timely_controller.get_send_delay(len(packet_to_send))
+                            if send_delay > 0:
+                                time.sleep(send_delay)
+                        
                         try:
                             udp_sock.sendto(
                                 (packet_to_send),
@@ -197,7 +231,22 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
                         if config.DEBUG:
                             now = datetime.datetime.now()
                             time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
-                            print(f"SENDER MLT: Sent chunk {i}/{num_chunks} via UDP at {time_with_ms}.")
+                            timely_info = ""
+                            if timely_controller:
+                                stats = timely_controller.get_stats()
+                                rtt_str = f"{stats['smoothed_rtt_ms']:.2f}" if stats['smoothed_rtt_ms'] is not None else "N/A"
+                                timely_info = f" [TIMELY: {stats['rate_mbps']:.1f} Mbps, RTT: {rtt_str}ms]"
+                            print(f"SENDER MLT: Sent chunk {i}/{num_chunks} via UDP at {time_with_ms}.{timely_info}")
+
+                # Update TIMELY controller with round-trip measurements if available
+                if timely_controller and round_start_time and chunks_sent_this_round > 0:
+                    # Use a simple approach: measure from start of round to end of sending
+                    timely_controller.update_rtt(round_start_time)
+                    if config.DEBUG:
+                        stats = timely_controller.get_stats()
+                        rtt_str = f"{stats['smoothed_rtt_ms']:.2f}" if stats['smoothed_rtt_ms'] is not None else "N/A"
+                        print(f"SENDER MLT: TIMELY updated - Rate: {stats['rate_mbps']:.1f} Mbps, "
+                              f"RTT: {rtt_str}ms, State: {stats['congestion_state']}")
 
                     # ZM 8.3.2025: I think doing this twice in the for loop has too much overhead.
                     # cond, new_bitmap = _check_if_told_to_stop(tcp_sock, signal_counter, server_ack_bitmap)
@@ -220,6 +269,12 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
                     # Format using an f-string, calculating milliseconds from microseconds
                     time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
                     print(f"SENDER MLT: Sending 'Probe' (P) via TCP at {time_with_ms}.")
+                
+                # Start RTT measurement for probe if TIMELY is enabled
+                probe_start_time = None
+                if timely_controller:
+                    probe_start_time = timely_controller.start_measurement()
+                
                 try:
                     utility.send_signal_tcp(tcp_sock, b"P", signal_counter)
                 except Exception as e:
@@ -247,6 +302,11 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
                     # If the server responds, we can break out of the loop
                     if config.DEBUG:
                         print("SENDER MLT: Server responded to 'Probe' (P).")
+                    
+                    # Update TIMELY controller with probe RTT if enabled
+                    if timely_controller and probe_start_time:
+                        timely_controller.update_rtt(probe_start_time)
+                    
                     break
 
             #  --- Phase 4: Receive server's response (S or B + bitmap) ---
@@ -263,6 +323,11 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
 
             if signal == b"S":
                 print("SENDER MLT: Received 'Stop' (S). Transfer complete.")
+                if timely_controller and config.DEBUG:
+                    final_stats = timely_controller.get_stats()
+                    rtt_str = f"{final_stats['smoothed_rtt_ms']:.2f}" if final_stats['smoothed_rtt_ms'] is not None else "N/A"
+                    print(f"SENDER MLT: Final TIMELY stats - Rate: {final_stats['rate_mbps']:.1f} Mbps, "
+                          f"RTT: {rtt_str}ms")
                 return True
             elif signal == b"B":
                 print("SENDER MLT: Received 'Bitmap' (B) signal, receiving bitmap.")

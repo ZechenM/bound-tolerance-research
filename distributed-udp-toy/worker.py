@@ -64,26 +64,29 @@ class MLWorker:
             num_gradients = len(gradients_dict)
             self.tcp_sock.sendall(struct.pack("!I", num_gradients))
 
+            # Serialize all gradients first
+            metadata_list = []
+            all_payload_bytes = b""
+            
             for key, tensor in gradients_dict.items():
-                print(f"[Worker {self.id}] Sending gradient for key: '{key}'")
+                print(f"[Worker {self.id}] Serializing gradient for key: '{key}'")
+                
+                metadata, tensor_bytes = mlt.serialize_gradient_to_custom_binary(self.tcp_sock, key, tensor)
+                metadata_list.append(metadata)
+                all_payload_bytes += tensor_bytes
 
-                payload_bytes = mlt.serialize_gradient_to_custom_binary(self.tcp_sock, key, tensor)
+            # Send all gradients in a single MLT transmission
+            socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
+            addrs = {"udp": (self.server_host, self.dedicated_server_udp_port)}
+            addrs["tcp"] = (self.server_host, self.tcp_port)
 
-                if payload_bytes is None:
-                    print(f"[Worker {self.id}] Failed to serialize gradient for key '{key}'. Aborting.")
-                    return
+            signal_counter = 1  # Simple counter for this transmission
+            success = mlt.send_data_mlt(socks, addrs, metadata_list, all_payload_bytes, signal_counter)
 
-                socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
-                addrs = {"udp": (self.server_host, self.dedicated_server_udp_port)}
-                addrs["tcp"] = (self.server_host, self.tcp_port)
-
-                success = mlt.send_data_mlt(socks, addrs, payload_bytes)
-
-                if success:
-                    print(f"[Worker {self.id}] Successfully completed transmission for key '{key}'.")
-                else:
-                    print(f"[Worker {self.id}] Failed to transmit data for key '{key}'.")
-                    break
+            if success:
+                print(f"[Worker {self.id}] Successfully completed transmission of all gradients.")
+            else:
+                print(f"[Worker {self.id}] Failed to transmit gradient data.")
 
             print(f"[Worker {self.id}] --- Finished gradient transmission ---")
 
