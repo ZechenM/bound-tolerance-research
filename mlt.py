@@ -445,7 +445,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
     # prepare to receive UDP chunks
     received_chunks = [None] * num_chunks
     bitmap = bytearray((num_chunks + 7) // 8)
-    expected_packet_size = config.CHUNK_SIZE + 12  # 12-byte header
+    expected_packet_size = config.CHUNK_SIZE + 16  # 16-byte header
 
     has_stopped = False
     udp_recv_counter = 0
@@ -479,7 +479,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
                         f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}) at {time_with_ms}."
                     )
                     udp_recv_counter += 1
-                if len(packet) < 12:
+                if len(packet) < 16:
                     udp_recv_counter -= 1  # Ignore this packet, it is too small
                     print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Packet too small: {len(packet)} bytes. Ignoring.")
                     continue
@@ -498,7 +498,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
                 elif CRC32(packet[16:]) != checksum:
                     if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 4: Chunk #{seq} Checksum Failed")
                 else:
-                    received_chunks[seq] = packet[12:]
+                    received_chunks[seq] = packet[16:]
                     byte_idx, bit_idx = divmod(seq, 8)
                     bitmap[byte_idx] |= 1 << bit_idx
                     if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk #{seq} is disposed")
