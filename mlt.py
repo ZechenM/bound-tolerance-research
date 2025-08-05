@@ -436,7 +436,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
         raise ValueError(f"RECEIVER ERROR: Invalid number of chunks received: {num_chunks}")
     received_chunks: list[None | bytes] = [None] * num_chunks
     bitmap = bytearray((num_chunks + 7) // 8)
-    expected_packet_size = config.CHUNK_SIZE + 12  # 12-byte header
+    expected_packet_size = config.CHUNK_SIZE + 16  # 16-byte header
 
     has_stopped = False
     udp_recv_counter = 0
@@ -456,12 +456,12 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                 packet, udp_addr = udp_sock.recvfrom(expected_packet_size + 100)
                 now = datetime.datetime.now()
                 time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
-                # if config.DEBUG:
-                #     print(
-                #         f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}) at {time_with_ms}."
-                #     )
-                udp_recv_counter += 1
-                if len(packet) < 12:
+                if config.DEBUG:
+                    print(
+                        f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}) at {time_with_ms}."
+                    )
+                    udp_recv_counter += 1
+                if len(packet) < 16:
                     udp_recv_counter -= 1  # Ignore this packet, it is too small
                     print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Packet too small: {len(packet)} bytes. Ignoring.")
                     continue
@@ -488,7 +488,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                 elif CRC32(packet[16:]) != checksum:
                     if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 4: Chunk #{seq} Checksum Failed")
                 else:
-                    received_chunks[seq] = packet[12:]
+                    received_chunks[seq] = packet[16:]
                     byte_idx, bit_idx = divmod(seq, 8)
                     bitmap[byte_idx] |= 1 << bit_idx
                     # if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk #{seq} is disposed")
