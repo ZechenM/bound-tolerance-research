@@ -109,7 +109,8 @@ class MLServer:
 
             while self.running:
                 print(f"[{tcp_addr}] Waiting to receive new gradient data from worker...")
-                result = mlt.recv_data_mlt(socks, tcp_addr)
+                expected_counter = 1  # Match the counter from worker
+                result = mlt.recv_data_mlt(socks, tcp_addr, expected_counter)
 
                 if result is None:
                     print(f"[{tcp_addr}] Worker has disconnected gracefully. Closing thread.")

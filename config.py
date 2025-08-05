@@ -77,3 +77,14 @@ TCP_MAX_RETRIES = 3  # Maximum number of retries for TCP connections
 
 # config 10: timeout
 probe_response_timeout = 0.001  # Timeout for probe responses in seconds
+
+# config 11: TIMELY congestion control parameters
+ENABLE_TIMELY = True  # Enable TIMELY congestion control for UDP
+TIMELY_INITIAL_RATE_MBPS = 10.0  # Initial transmission rate in Mbps
+TIMELY_TARGET_RTT_MS = 5.0  # Target RTT in milliseconds
+TIMELY_MAX_RATE_MBPS = 100.0  # Maximum transmission rate in Mbps
+TIMELY_MIN_RATE_MBPS = 1.0  # Minimum transmission rate in Mbps
+TIMELY_ALPHA = 0.875  # RTT smoothing factor (0-1)
+TIMELY_BETA = 0.8  # Rate decrease factor (0-1)  
+TIMELY_ADDITIVE_INCREASE_MBPS = 10.0  # Additive increase step size
+TIMELY_RTT_THRESHOLD_FACTOR = 1.5  # Multiple of target RTT for threshold
