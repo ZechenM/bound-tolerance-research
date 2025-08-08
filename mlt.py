@@ -181,7 +181,7 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
                     if not ((server_ack_bitmap[byte_idx] >> bit_idx) & 1):
                         chunk_payload = chunks[i]
                         # Header: chunk_id (0-indexed), total_chunks, payload_length_of_this_chunk
-                        header = struct.pack("!III", i, num_chunks, len(chunk_payload))
+                        header = struct.pack("!III", i, signal_counter, len(chunk_payload))
                         packet_to_send = header + chunk_payload
                         try:
                             udp_sock.sendto(
@@ -201,14 +201,7 @@ def send_data_mlt(socks: dict, addrs: dict, metadata: list, gradient_payload_byt
 
                     # ZM 8.3.2025: I think doing this twice in the for loop has too much overhead.
                     # cond, new_bitmap = _check_if_told_to_stop(tcp_sock, signal_counter, server_ack_bitmap)
-                    # if cond:
-                    #     if config.DEBUG:
-                    #         print("SENDER MLT: 'Stop' signal received at the end of for loop. Transmission COMPLETED")
-                    #         print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round")
-                    #     return True
-                    # else:
-                    #     if new_bitmap is not None and new_bitmap != server_ack_bitmap:
-                    #         server_ack_bitmap = new_bitmap
+
 
             # --- Phase 3: Send "Probe" (P) signal via TCP ---
             while True:
@@ -371,19 +364,6 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
             now = datetime.datetime.now()
             time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
 
-            # if not readable:
-            #     if config.DEBUG:
-            #         print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received in this round. Continuing to wait at {time_with_ms}...")
-            #     continue
-
-            # if udp_sock not in readable:
-            #     if config.DEBUG:
-            #         print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received on UDP socket. Continuing to wait at {time_with_ms}...")
-
-            # if tcp_sock not in readable:
-            #     if config.DEBUG:
-            #         print(f"[Worker {tcp_addr}] RECEIVER MLT: No data received on TCP socket. Continuing to wait at {time_with_ms}...")
-
             if udp_sock in readable:
                 if config.DEBUG:
                     print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): UDP socket is readable. Waiting for data from sender at {time_with_ms}...")
@@ -404,8 +384,13 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
                 # ZM 7.20 no need to pickle/unpickle b/c pickle will increase the packet size here
                 # packet = pickle.loads(packet)
 
-                seq, _, chunk_len_in_header = struct.unpack("!III", packet[:12])
-                if seq < num_chunks and received_chunks[seq] is None and len(packet[12:]) == chunk_len_in_header:
+                seq, received_signal_counter, chunk_len_in_header = struct.unpack("!III", packet[:12])
+                
+                if received_signal_counter != expected_counter:
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received counter {received_signal_counter} does not match expected counter {expected_counter}. Ignoring packet.")
+                    continue
+                
+                if seq < num_chunks and received_chunks[seq] is None and len(packet[12:]) == chunk_len_in_header and received_signal_counter == expected_counter:
                     received_chunks[seq] = packet[12:]
                     byte_idx, bit_idx = divmod(seq, 8)
                     bitmap[byte_idx] |= 1 << bit_idx
@@ -492,6 +477,11 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, recv_lock
             received_chunks[i] = b"\x00" * config.CHUNK_SIZE  # Fill missing chunks with empty bytes
 
     concatenated_data = b"".join(received_chunks)
+    total_tensor_data_len = sum(metadata.get("tensor_data_len", 0) for metadata in metadata_list)
+    if len(concatenated_data) < total_tensor_data_len:
+        raise ValueError(
+            f"[Worker {tcp_addr}] RECEIVER ERROR: Concatenated data length {len(concatenated_data)} is less than expected total tensor data length {total_tensor_data_len}."
+        )
     cursor = 0
 
     for metadata in metadata_list:
