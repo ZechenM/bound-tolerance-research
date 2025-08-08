@@ -57,15 +57,17 @@ def run_experiment():
     # Adjust this path if your scripts are located elsewhere
     PROJECT_DIR = "/root/shared"
 
-    SERVER_SCRIPT = f"{PROJECT_DIR}/server_multithreading.py"
-    WORKER_SCRIPT = f"{PROJECT_DIR}/worker_multithreading.py"
+    SERVER_SCRIPT = f"{PROJECT_DIR}/server_multithreading_per_val.py"
+    WORKER_SCRIPT = f"{PROJECT_DIR}/worker_multithreading_per_val.py"
+    PROTOCOL = "MLT"
+    LOSS = 0.1  # Link loss percentage for worker links
     INITIAL_SERVER_PORT = 60001  # Default port used in your script
 
     # Define log paths within the Mininet nodes' filesystems
     # Using /tmp/ for simplicity, adjust if needed
     now = datetime.datetime.now()
     timestamp = now.strftime("%Y%m%d_%H%M%S")
-    LOG_DIR_BASE = f"{PROJECT_DIR}/mininet_logs/{timestamp}"
+    LOG_DIR_BASE = f"{PROJECT_DIR}/mininet_logs/{PROTOCOL}_{LOSS}/{timestamp}"
     SERVER_LOG = f"{LOG_DIR_BASE}/server.log"
     WORKER0_LOG = f"{LOG_DIR_BASE}/worker0.log"
     WORKER1_LOG = f"{LOG_DIR_BASE}/worker1.log"
