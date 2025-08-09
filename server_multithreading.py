@@ -9,6 +9,7 @@ import torch
 
 import config
 import mlt
+import utility
 
 
 class TrainingPhase(Enum):
@@ -127,6 +128,8 @@ class Server:
     def handle_worker(self, client_tcp_sock, tcp_addr):
         """Manages the full round-trip lifecycle for a single worker."""
         dedicated_udp_sock = None
+        have_received_metadata = False
+        metadata_list = []
 
         try:
             dedicated_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -141,9 +144,18 @@ class Server:
             signal_counter = 0
 
             while self.running:
+                # ZM 8.8.2025: the first thing to receive is the ACTUAL metadata list (not the number of chunks)
+                # 0. receive metadata from the worker
+                if not have_received_metadata:
+                    print(f"[{tcp_addr}] Waiting to receive metadata from worker...")
+                    metadata_list = utility.receive_data_tcp(client_tcp_sock)
+
+                    have_received_metadata = True
+                    print(f"[{tcp_addr}] Received metadata from worker.")
+
                 # 1. Receive gradients from the worker
                 print(f"[{tcp_addr}] Waiting to receive gradients from worker...")
-                result = mlt.recv_data_mlt(socks, tcp_addr, signal_counter, None)
+                result = mlt.recv_data_mlt(socks, tcp_addr, signal_counter, metadata_list)
                 signal_counter += 1  # Increment signal counter after receiving
 
                 if result is None:
@@ -226,9 +238,7 @@ class Server:
                 f"num_subgradients:{num_subgradients}, len(avg_gradients):{len(avg_gradients)} mismatch.\n"
                 f"This should not happen because epoch and eval_acc has been deleted by me"
             )
-        tcp_sock.sendall(struct.pack("!I", num_subgradients))
 
-        metadata_list = []
         payload_bytes_list = []
 
         for key, tensor in avg_gradients.items():
@@ -237,15 +247,18 @@ class Server:
                 print(f"    Value is likely eval data: {tensor}")
                 continue
 
-            metadata, payload_bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)
-            if metadata is None or payload_bytes is None:
-                raise ValueError(f"Failed to serialize tensor data for key '{key}'. Either metadata or payload_bytes is None.")
-            metadata_list.append(metadata)
+            _, payload_bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)
+            if payload_bytes is None:
+                raise ValueError(
+                    f"Failed to serialize tensor data for key '{key}'. "
+                    f"payload_bytes is None."
+                )
+
             payload_bytes_list.append(payload_bytes)
 
         # concatenate payload bytes into a single bytes object
         all_payload_bytes = b"".join(payload_bytes_list)
-        success = mlt.send_data_mlt(socks, addrs, metadata_list, all_payload_bytes, signal_counter)
+        success = mlt.send_data_mlt(socks, addrs, all_payload_bytes, signal_counter)
         if not success:
             raise ValueError(f"SERVER ERROR: Failed to send tensor data for key '{key}' using MLT. Aborting.")
         else:

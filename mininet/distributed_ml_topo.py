@@ -117,7 +117,11 @@ def run_experiment():
     # Create log file for redirecting output
     os.makedirs(os.path.dirname(SERVER_LOG), exist_ok=True)
     # server_node.popen(server_cmd.split(), stdout=open(SERVER_LOG, "w"), stderr=open(SERVER_LOG, "a"))
-    server_proc = server_node.popen(server_cmd.split(), stdout=open(SERVER_LOG, "w"), stderr=open(SERVER_LOG, "a"))
+    server_proc = server_node.popen(
+        server_cmd.split(),
+        stdout=open(SERVER_LOG, "w"),
+        stderr=open(SERVER_LOG, "a"),
+    )
 
     # Give the server a moment to start up and bind to the port
     info("*** Waiting for server to initialize...\n")
@@ -134,17 +138,29 @@ def run_experiment():
     # Worker 0
     worker0_cmd = f"{PYTHON} -u {WORKER_SCRIPT} 0 {server_ip} {INITIAL_SERVER_PORT}"
     info(f"Executing on worker0: {worker0_cmd}\n")
-    worker0_proc = worker0_node.popen(worker0_cmd.split(), stdout=open(WORKER0_LOG, "w"), stderr=open(WORKER0_LOG, "a"))
+    worker0_proc = worker0_node.popen(
+        worker0_cmd.split(),
+        stdout=open(WORKER0_LOG, "w"),
+        stderr=open(WORKER0_LOG, "a"),
+    )
 
     # Worker 1
     worker1_cmd = f"{PYTHON} -u {WORKER_SCRIPT} 1 {server_ip} {INITIAL_SERVER_PORT}"
     info(f"Executing on worker1: {worker1_cmd}\n")
-    worker1_proc = worker1_node.popen(worker1_cmd.split(), stdout=open(WORKER1_LOG, "w"), stderr=open(WORKER1_LOG, "a"))
+    worker1_proc = worker1_node.popen(
+        worker1_cmd.split(),
+        stdout=open(WORKER1_LOG, "w"),
+        stderr=open(WORKER1_LOG, "a"),
+    )
 
     # Worker 2
     worker2_cmd = f"{PYTHON} -u {WORKER_SCRIPT} 2 {server_ip} {INITIAL_SERVER_PORT}"
     info(f"Executing on worker2: {worker2_cmd}\n")
-    worker2_proc = worker2_node.popen(worker2_cmd.split(), stdout=open(WORKER2_LOG, "w"), stderr=open(WORKER2_LOG, "a"))
+    worker2_proc = worker2_node.popen(
+        worker2_cmd.split(),
+        stdout=open(WORKER2_LOG, "w"),
+        stderr=open(WORKER2_LOG, "a"),
+    )
 
     # --- End Application Start ---
 

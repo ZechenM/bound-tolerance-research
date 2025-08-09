@@ -221,7 +221,11 @@ class DistributedTrainer(Trainer):
 
         # Call the parent's train method with our adjusted settings
         # This will still load the checkpoint state but won't skip training
-        result = super().train(resume_from_checkpoint=resume_checkpoint, trial=trial, ignore_keys_for_eval=ignore_keys_for_eval)
+        result = super().train(
+            resume_from_checkpoint=resume_checkpoint,
+            trial=trial,
+            ignore_keys_for_eval=ignore_keys_for_eval,
+        )
 
         print(f"Worker {self.worker_id} training completed successfully")
         self.print_total_network_latency()
