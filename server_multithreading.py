@@ -130,6 +130,7 @@ class Server:
         dedicated_udp_sock = None
         have_received_metadata = False
         metadata_list = []
+        num_chunks = -666
 
         try:
             dedicated_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -149,13 +150,14 @@ class Server:
                 if not have_received_metadata:
                     print(f"[{tcp_addr}] Waiting to receive metadata from worker...")
                     metadata_list = utility.receive_data_tcp(client_tcp_sock)
+                    num_chunks = utility.receive_data_tcp(client_tcp_sock)
 
                     have_received_metadata = True
-                    print(f"[{tcp_addr}] Received metadata from worker.")
+                    print(f"[{tcp_addr}] Received metadata {len(metadata_list)} key-vals and {num_chunks} chunks from worker.")
 
                 # 1. Receive gradients from the worker
                 print(f"[{tcp_addr}] Waiting to receive gradients from worker...")
-                result = mlt.recv_data_mlt(socks, tcp_addr, signal_counter, metadata_list)
+                result = mlt.recv_data_mlt(socks, tcp_addr, signal_counter, metadata_list, num_chunks)
                 signal_counter += 1  # Increment signal counter after receiving
 
                 if result is None:

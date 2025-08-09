@@ -121,7 +121,12 @@ def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tenso
 
 
 # ZM 8.8.2025: deleted one function parameter `metadata_list`
-def send_data_mlt(socks: dict, addrs: dict, gradient_payload_bytes: bytes, signal_counter: int) -> bool:
+def send_data_mlt(
+    socks: dict,
+    addrs: dict,
+    gradient_payload_bytes: bytes,
+    signal_counter: int,
+) -> bool:
     """
     Sends gradient data bytes using the MLT protocol (UDP with TCP-based ACK/retransmission).
     Returns True on success, False on failure.
@@ -135,20 +140,13 @@ def send_data_mlt(socks: dict, addrs: dict, gradient_payload_bytes: bytes, signa
 
     chunks = _chunk_data(gradient_payload_bytes)
     num_chunks = len(chunks)
-    if num_chunks == 0:
+    if num_chunks <= 0:
         raise ValueError("SENDER MLT: No chunks to send. Exiting.")
 
     try:
-        # -------------- TCP Phase: Send Metadata --------------
-        # Send metadata first
-
+        # -------------- (DEPRECATED) TCP Phase: Send Metadata --------------
         # ZM on 8.8.2025: the only metadata to be sent out is the number of chunks
-        utility.send_signal_tcp(tcp_sock, b"M", signal_counter)  # M for Metadata
-        utility.send_data_tcp(tcp_sock, num_chunks)
-
-        if config.DEBUG:
-            print(f"SENDER MLT: Metadata sent with {num_chunks} chunks.")
-
+        # ZM on 8.9.2025: no metadata will be sent here, because it has already been sent before calling this function
         server_ack_bitmap = bytearray((num_chunks + 7) // 8)
         max_retries_no_progress = 10
         no_progress_rounds = 0
@@ -302,7 +300,9 @@ def send_data_mlt(socks: dict, addrs: dict, gradient_payload_bytes: bytes, signa
 # ZM 8.8.2025: recv_lock has been deleted and replaced by metadata_list
 # metadata_list will be a local variable that workers and servers
 # keep track of themselves
-def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_list: list) -> tuple[dict | None, tuple] | None:
+# ZM 8.9.2025: metadata_list includes num_chunks which will be part
+# of the local variable that workers and servers keep track of themselves
+def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_list: list, num_chunks: int) -> tuple[dict | None, tuple] | None:
     """
     Receives gradient data using the MLT protocol.
     Returns a dictionary of reconstructed gradients.
@@ -347,36 +347,10 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
 
     # ZM 8.8.2025: this is extra safe with a M signal for metadata
     # where the metadata is ONLY the number of chunks
-    signal, received_counter = utility.recv_signal_tcp(tcp_sock)
-    retry_count = 1
-    while signal != b"M" or received_counter != expected_counter:
-        print(
-            f"""[Worker {tcp_addr}] RECEIVER MLT: 
-            Received signal '{signal}' with counter {received_counter}. 
-            Expected 'M' with counter {expected_counter}. Retrying ({retry_count})...
-            """
-        )
-
-        if retry_count > 20:
-            raise ValueError(
-                f"""[Worker {tcp_addr}] RECEIVER MLT ERROR: 
-                Failed to receive 'M' signal after 20 retries. 
-                Connection may be closed.
-                """
-            )
-
-        signal, received_counter = utility.recv_signal_tcp(tcp_sock)
-        retry_count += 1
-
-    if config.DEBUG:
-        print(
-            f"[Worker {tcp_addr}] RECEIVER MLT: "
-            f"Received 'M' signal with counter {received_counter}. "
-            f"Proceeding to receive number of chunks."
-        )
-
-    num_chunks = utility.receive_data_tcp(tcp_sock)
-    received_chunks = [None] * num_chunks
+    # ZM 8.9.2025: num_chunks is now passed as a parameter
+    if not isinstance(num_chunks, int) or num_chunks <= 0:
+        raise ValueError(f"RECEIVER ERROR: Invalid number of chunks received: {num_chunks}")
+    received_chunks: list[None | bytes] = [None] * num_chunks
     bitmap = bytearray((num_chunks + 7) // 8)
     expected_packet_size = config.CHUNK_SIZE + 12  # 12-byte header
 

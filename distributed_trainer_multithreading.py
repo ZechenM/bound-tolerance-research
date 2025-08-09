@@ -45,6 +45,8 @@ class DistributedTrainerMultithreading(Trainer):
         self.signal_counter = 0  # Initialize signal counter for MLT protocol
         self.metadata_list = []  # Store metadata for MLT protocol
         self.has_sent_metadata = False  # Track if metadata has been sent
+        self.payload_bytes_list = []  # Store payload bytes for MLT protocol
+        self.chunks = []
 
         # network latency measurement
         self.start_time = 0
@@ -180,27 +182,32 @@ class DistributedTrainerMultithreading(Trainer):
         # Get gradients and ensure they're on CPU for communication
         gradients: dict[str, torch.Tensor | float] = {name: param.grad.cpu() for name, param in model.named_parameters() if param.grad is not None}
         # ZM 6/7/2025: for MLT, we don't add these 2 fields to the gradients dictionary
-        # instead, we send a signal to tell the receiver whether we are sending them or not
-
-        # ZM 6/27/2025: this file will not consider the case where the protocol is TCP
-        # so the following logic will never be triggered
-        if self.sent_eval and self.protocol == "TCP":
-            gradients["eval_acc"] = self.eval_acc
-            gradients["epoch"] = self.curr_epoch
+        # instead, we send a signal to tell the receiver whether we are sending them (epoch & eval_acc) or not
 
         # ZM 8/6/2025: metadata will only be sent once at the very beginning of the training
         if not self.has_sent_metadata:
             for key, tensor in gradients.items():
                 if not isinstance(tensor, torch.Tensor):
                     raise ValueError(f"Gradient for key '{key}' is not a tensor: {type(tensor)}")
-                metadata, _ = mlt.serialize_gradient_to_custom_binary(self.tcp_sock, key, tensor)
+                metadata, payload_bytes = mlt.serialize_gradient_to_custom_binary(self.tcp_sock, key, tensor)
                 self.metadata_list.append(metadata)
+                self.payload_bytes_list.append(payload_bytes)
 
-            # send metadata to the server
+            # preprocess num_chunks
+            all_payload_bytes = b"".join(self.payload_bytes_list)
+            self.chunks = mlt._chunk_data(all_payload_bytes)
+            num_chunks = len(self.chunks)
+            if num_chunks <= 0:
+                raise ValueError("No chunks to send. Exiting.")
+
+            # send metadata (metadata_list and num_chunks)
             utility.send_data_tcp(self.tcp_sock, self.metadata_list)
+            utility.send_data_tcp(self.tcp_sock, num_chunks)
+            print(f"[Worker {self.id}] 1st time sent metadata with {len(self.metadata_list)} items and {num_chunks} chunks.")
+
             self.has_sent_metadata = True
         else:
-            print(f"[Worker {self.id}] Metadata already sent: {len(self.metadata_list)} items. E.g. {self.metadata_list[0]}")
+            print(f"[Worker {self.id}] Metadata already sent: {len(self.metadata_list)} items. E.g. {self.metadata_list[0]} and {self.metadata_list[-1]}")
 
         # --------------- 6/27 UPDATES: bring in MLT -------------------------------
         self.start_time = time.perf_counter()  # Start measuring network latency
@@ -213,7 +220,13 @@ class DistributedTrainerMultithreading(Trainer):
 
         print(f"[Worker {self.id}] Gradients sent. Waiting to receive averaged model back...")
         socks = {"tcp": self.tcp_sock, "udp": self.udp_sock}
-        result = mlt.recv_data_mlt(socks, (self.server_host, self.tcp_port), self.signal_counter, self.metadata_list)
+        result = mlt.recv_data_mlt(
+            socks,
+            (self.server_host, self.tcp_port),
+            self.signal_counter,
+            self.metadata_list,
+            len(self.chunks)
+        )
         self.signal_counter += 1  # Increment signal counter after receiving
 
         self.end_time = time.perf_counter()
