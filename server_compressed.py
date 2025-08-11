@@ -8,7 +8,6 @@ from enum import Enum
 import torch
 
 import config
-import mlt
 
 
 class TrainingPhase(Enum):
@@ -202,15 +201,7 @@ class Server:
         self.has_eval_acc = False
 
         for conn in self.connections:
-            if config.protocol == "MLT":
-                # UDP socket needs to be changed to a 1-to-1 correspondence with each worker
-                # for the toy example, we can only have one worker and one server
-                socks = {"tcp": conn, "udp": self.UDP_socket}
-                grad = mlt.recv_data_mlt(socks)
-            elif config.protocol == "TCP":
-                grad = self.recv_data_TCP(conn)
-            else:
-                raise TypeError(f"protocol {self.protocol} is not supported (TCP | MLT)")
+            grad = self.recv_data_TCP(conn)
 
             if grad is None:
                 print(f"Failed to receive data from worker {self.conn_addr_map[conn]}.")
@@ -224,8 +215,8 @@ class Server:
                 del grad["eval_acc"]
 
             gradients.append(grad)
-            if config.DEBUG:
-                print(f"Received gradients from worker {self.conn_addr_map[conn]}: {grad.keys()}")
+            # if config.DEBUG:
+            #     print(f"Received gradients from worker {self.conn_addr_map[conn]}: {grad.keys()}")
 
         if config.DEBUG:
             print(f"Received {len(gradients)} gradients from workers.")
@@ -326,39 +317,11 @@ class Server:
                         print(f"Relative change: {relative_change:.6f} (threshold: {self.CLR_eta})")
                     self.CLR_lst.append((self.CLR_iter_count, self.is_CLR_batch, self.CLR_curr_grad_norm))
 
-
         # Send averaged gradients back to all workers
         for conn in self.connections:
             tcp_sock = conn
             ip, port = self.conn_addr_map[conn]
-            if self.protocol == "MLT":
-                socks = {"tcp": tcp_sock, "udp": self.UDP_socket}
-                receiver = (ip, port)
-
-                # Before serializing and send the tensor data, 2 IMPORTANT STEPS
-                # STEP 0: send N signal as the server will NEVER send the E signal
-                try:
-                    tcp_sock.sendall(b"N")
-                except Exception as e:
-                    print(f"Failed to send N signal to worker {self.conn_addr_map[conn]}: {e}")
-                    continue
-                # STEP 1: send how many sub-tensors (subgradients / key-val pairs) will be sent
-                num_subgradients = len(avg_gradients)
-                try:
-                    tcp_sock.sendall(struct.pack("!I", num_subgradients))
-                except Exception as e:
-                    print(f"Failed to send number of subgradients to worker {self.conn_addr_map[conn]}: {e}")
-                    continue
-
-                for key, tensor in avg_gradients.items():
-                    # Serialize each tensor to custom binary format
-                    averaged_tensor_bytes = mlt.serialize_gradient_to_custom_binary(tcp_sock, key, tensor)
-                    mlt.send_data_mlt(socks, receiver, averaged_tensor_bytes)
-            elif self.protocol == "TCP":
-                self.send_data_TCP(tcp_sock, pickle.dumps(avg_gradients))
-            else:
-                raise TypeError(f"protocol {self.protocol} is not supported (TCP | MLT)")
-            # print(f"Sent averaged gradients to worker {self.conn_addr_map[conn]}")
+            self.send_data_TCP(tcp_sock, pickle.dumps(avg_gradients))
 
     def run_server(self) -> None:
         while self.is_listening:

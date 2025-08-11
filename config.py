@@ -27,7 +27,7 @@ protocol = ["TCP", "MLT"][1]
 
 # config 6: bounded-loss tolerance
 loss_tolerance = 0
-CHUNK_SIZE = 1024
+CHUNK_SIZE = 8192  # Size of each chunk to send over the network, in bytes
 
 # config 7: Mappings for Dtypes
 # These mappings help convert between torch.dtype, its string representation,
@@ -37,7 +37,6 @@ TORCH_DTYPE_TO_STR = {
     torch.float32: "torch.float32",
     torch.float64: "torch.float64",
     torch.float16: "torch.float16",
-    # torch.bfloat16: 'torch.bfloat16', # Needs special handling if required
     torch.complex32: "torch.complex32",  # Typically 2x float16, needs special handling
     torch.complex64: "torch.complex64",  # Typically 2x float32
     torch.complex128: "torch.complex128",  # Typically 2x float64
@@ -72,3 +71,9 @@ STR_TO_NUMPY_DTYPE = {str(k): v for k, v in TORCH_TO_NUMPY_DTYPE.items()}
 BEGIN_DROP = 0.0
 MID_DROP = 0.0
 FINAL_DROP = 0.0
+
+# config 9: tcp max retries
+TCP_MAX_RETRIES = 3  # Maximum number of retries for TCP connections
+
+# config 10: timeout
+probe_response_timeout = 0.001  # Timeout for probe responses in seconds

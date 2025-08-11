@@ -24,7 +24,13 @@ for worker_id in range(3):
 results = []
 for epoch, accuracies in worker_results.items():
     avg_accuracy = sum(accuracies) / len(accuracies)
-    results.append({"epoch": epoch, "avg_accuracy": round(avg_accuracy, 4), "worker_accuracies": [round(acc, 4) for acc in accuracies]})
+    results.append(
+        {
+            "epoch": epoch,
+            "avg_accuracy": round(avg_accuracy, 4),
+            "worker_accuracies": [round(acc, 4) for acc in accuracies],
+        }
+    )
 
 # Sort results by epoch number
 results.sort(key=lambda x: x["epoch"])

@@ -16,7 +16,7 @@ from my_datasets import CIFAR10Dataset
 resume_from_checkpoint = False
 
 train_args = TrainingArguments(
-    num_train_epochs=5,
+    num_train_epochs=2,
     per_device_train_batch_size=8,
     per_device_eval_batch_size=8,
     weight_decay=0.01,
@@ -34,7 +34,7 @@ train_args = TrainingArguments(
 
 
 class Worker:
-    def __init__(self, worker_id, host="localhost", port="60001"):
+    def __init__(self, worker_id, host="localhost", port=60001):
         self.worker_id = worker_id
         self.server_host = host
         self.server_port = port

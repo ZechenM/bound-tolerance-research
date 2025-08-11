@@ -4,6 +4,7 @@ import os
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torchvision.models as models
 from sklearn.metrics import accuracy_score
 from transformers import TrainingArguments
@@ -15,7 +16,7 @@ from my_datasets import CIFAR10Dataset
 resume_from_checkpoint = False
 
 train_args = TrainingArguments(
-    num_train_epochs=5,
+    num_train_epochs=2,
     per_device_train_batch_size=8,
     per_device_eval_batch_size=8,
     weight_decay=0.01,
@@ -57,8 +58,10 @@ class Worker:
         # Load denseNet169 model
         # self.model = models.densenet169(weights=None)
         # Modify the model's classifier to output 10 classes (CIFAR10)
+        # ------------- denseNet 169 specific starts -------------
         # in_features = self.model.classifier.in_features
         # self.model.classifier = nn.Linear(in_features, 10)
+        # ------------- denseNet 169 specific ends -------------
         self.model = self.model.to(self.device)
         print(f"Model moved to {self.device}")
 
@@ -140,7 +143,7 @@ class Worker:
 
         # Check for latest checkpoint
         latest_checkpoint = self.find_latest_checkpoint()
-        # latest_checkpoint = None
+        latest_checkpoint = None
         if latest_checkpoint:
             print(f"Found latest checkpoint at {latest_checkpoint}. Will resume training from this point.")
         else:
@@ -188,11 +191,27 @@ def main():
         type=int,
         help="The unique integer ID for this worker (e.g., 0, 1, or 2).",
     )
+    parser.add_argument(
+        "server_host",
+        nargs="?",
+        type=str,
+        default="127.0.0.1",
+        help="The IP address of the server. Default is 127.0.0.1.",
+    )
+
+    parser.add_argument(
+        "server_port",
+        nargs="?",
+        type=int,
+        default=9999,
+        help="The port number of the server. Default is 9999.",
+    )
     args = parser.parse_args()
 
     worker = Worker(
         worker_id=args.worker_id,
-        server_host="127.0.0.1",
+        server_host=args.server_host,
+        tcp_port=args.server_port,
     )
     worker.train_worker()
 

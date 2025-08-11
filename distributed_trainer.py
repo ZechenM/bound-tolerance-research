@@ -29,15 +29,15 @@ class DistributedTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         # Extract our custom parameters before passing to parent
         self.server_host = kwargs.pop("server_host", "localhost")
-        self.server_port = kwargs.pop("server_port", 60000)
+        self.server_port = kwargs.pop("server_port", 60001)
         self.worker_id = kwargs.pop("worker_id", 0)
         self.device = kwargs.pop("device", torch.device("cpu"))  # Get device from kwargs
         self.network_latency_list = []
         self.start_time = 0
         self.end_time = 0
         self.past_epoch = 0.0
-        self.protocol = kwargs.pop("protocol", "MLT")
-        self.loss_tolerance = kwargs.pop("loss_tolerance", 0.03)
+        self.protocol = kwargs.pop("protocol", "TCP")
+        self.loss_tolerance = kwargs.pop("loss_tolerance", 0.00)
         self.UDP_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.UDP_socket.bind(("0.0.0.0", self.server_port + 2 + self.worker_id))
 
@@ -76,52 +76,10 @@ class DistributedTrainer(Trainer):
             # print(self.server_host, self.server_port)
             s.connect((self.server_host, self.server_port))
             print(f"Worker {self.worker_id} connected to server.")
-            if self.protocol == "MLT":
-                # STEP 0: tell the receiver if we are sending eval_acc and epoch
-                if self.sent_eval:
-                    try:
-                        s.sendall(b"E")
-                    except Exception as e:
-                        print(f"Error sending eval signal: {e}")
-
-                    # send eval_acc and epoch which are 2 float values: self.eval_acc and self.curr_epoch
-                    # !f == >f for float, 4 bytes
-
-                    eval_acc_bytes = struct.pack("!f", self.eval_acc)
-                    epoch_bytes = struct.pack("!f", self.curr_epoch)
-                    try:
-                        s.sendall(eval_acc_bytes)
-                        s.sendall(epoch_bytes)
-                    except Exception as e:
-                        print(f"Error sending eval_acc and epoch: {e}")
-                    print(f"Worker {self.worker_id} sent eval_acc: {self.eval_acc}, epoch: {self.curr_epoch}")
-                else:
-                    try:
-                        s.sendall(b"N")
-                    except Exception as e:
-                        print(f"Error sending no eval signal: {e}")
-
-                # STEP 1: send how many subgradients (key-val pairs) are in the gradients
-                num_subgradients = len(gradients)
-                try:
-                    s.sendall(struct.pack("!I", num_subgradients))
-                except Exception as e:
-                    print(f"Error sending number of subgradients: {e}")
-
-                socks = {"tcp": s, "udp": self.UDP_socket}
-                server = (self.server_host, self.server_port)
-
-                # Send everything inside gradient key-val pair by key-val pair
-                for key, tensor in gradients.items():
-                    tensor_data: bytes = mlt.serialize_gradient_to_custom_binary(s, key, tensor)
-                    mlt.send_data_mlt(socks, server, tensor_data)
-            elif self.protocol == "TCP":
-                self.send_data_TCP(s, gradients)
-            else:
-                raise ValueError(f"Unsupported protocol: {self.protocol}")
+            self.send_data_TCP(s, gradients)
 
             # Receive averaged gradients from the server
-            avg_gradients = mlt.recv_data_mlt(socks)
+            avg_gradients = self.recv_data_TCP(s)
             if avg_gradients is None:
                 return False, None
         return True, avg_gradients
@@ -205,7 +163,13 @@ class DistributedTrainer(Trainer):
             gradients["epoch"] = self.curr_epoch
 
         # Send gradients to server and receive averaged gradients
+        self.start_time = time.perf_counter()
         update, avg_gradients = self.send_recv(gradients)
+        self.end_time = time.perf_counter()
+        self.calc_network_latency(is_send=True)
+
+        if not avg_gradients:
+            raise ValueError(f"Worker {self.worker_id} failed to receive averaged gradients from server.")
 
         if not update:
             print(f"Worker {self.worker_id} failed to receive averaged gradients.")
@@ -258,10 +222,14 @@ class DistributedTrainer(Trainer):
 
         # Call the parent's train method with our adjusted settings
         # This will still load the checkpoint state but won't skip training
-        result = super().train(resume_from_checkpoint=resume_checkpoint, trial=trial, ignore_keys_for_eval=ignore_keys_for_eval)
+        result = super().train(
+            resume_from_checkpoint=resume_checkpoint,
+            trial=trial,
+            ignore_keys_for_eval=ignore_keys_for_eval,
+        )
 
-        # print(f"Worker {self.worker_id} training completed successfully")
-        # self.print_total_network_latency()
+        print(f"Worker {self.worker_id} training completed successfully")
+        self.print_total_network_latency()
 
         return result
 

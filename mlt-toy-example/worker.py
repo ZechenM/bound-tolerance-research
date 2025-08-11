@@ -21,7 +21,12 @@ def tensors_to_lists(tensor_dict: dict) -> dict:
     return {k: v.tolist() if isinstance(v, torch.Tensor) else v for k, v in tensor_dict.items()}
 
 
-def run_worker(server_ip: str, server_port: int, gradient_file: str, send_eval_data: bool = False):
+def run_worker(
+    server_ip: str,
+    server_port: int,
+    gradient_file: str,
+    send_eval_data: bool = False,
+):
     """
     Main function to run the worker/client logic.
     - Connects to the server.
@@ -75,7 +80,10 @@ def run_worker(server_ip: str, server_port: int, gradient_file: str, send_eval_d
         # 2.3 Send each gradient using the MLT protocol
         socks: dict[str, socket.socket] = {"tcp": tcp_sock, "udp": udp_sock}
         # server_addr_for_mlt = (server_ip, server_port)
-        addrs: dict[str, tuple] = {"tcp": (server_ip, server_port), "udp": (server_ip, server_port + 1)}
+        addrs: dict[str, tuple] = {
+            "tcp": (server_ip, server_port),
+            "udp": (server_ip, server_port + 1),
+        }
 
         for key, tensor in tensor_dict.items():
             print(f"\nWORKER: Processing '{key}' for sending...")

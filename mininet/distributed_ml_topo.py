@@ -1,5 +1,4 @@
-#!/root/bound-tolerance-research/.venv/bin/python3.12
-
+import datetime
 import os
 import time
 
@@ -9,7 +8,7 @@ from mininet.net import Mininet
 from mininet.node import OVSKernelSwitch, RemoteController
 from mininet.topo import Topo
 
-PYTHON = "/root/bound-tolerance-research/.venv/bin/python3.12"
+PYTHON = "/root/.venv/bin/python3.12"
 
 
 class WorkerServerTopo(Topo):
@@ -34,8 +33,8 @@ class WorkerServerTopo(Topo):
         s1 = self.addSwitch("s1")
 
         # Define link characteristics
-        link_opts_base = dict(bw=100, delay="1ms", loss=0, max_queue_size=1000, use_htb=True)
-        link_opts_server = dict(bw=1000, delay="1ms", loss=0, max_queue_size=1000, use_htb=True)
+        link_opts_base = dict(bw=1000, delay="1ms", loss=0.1, max_queue_size=1000, use_htb=True)
+        link_opts_server = dict(bw=1000, delay="1ms", loss=0.1, max_queue_size=1000, use_htb=True)
 
         info("*** Adding Worker Links with Loss:\n")
         info(f"* Worker i <-> Switch: {link_opts_base}\n")
@@ -56,15 +55,17 @@ def run_experiment():
     # --- Configuration ---
     # Assumes your project scripts are located here within the Mininet VM/environment
     # Adjust this path if your scripts are located elsewhere
-    PROJECT_DIR = "/root/bound-tolerance-research"
+    PROJECT_DIR = "/root/shared"
 
-    SERVER_SCRIPT = f"{PROJECT_DIR}/server_compressed.py"
-    WORKER_SCRIPT = f"{PROJECT_DIR}/worker_trainer.py"
+    SERVER_SCRIPT = f"{PROJECT_DIR}/server_multithreading.py"
+    WORKER_SCRIPT = f"{PROJECT_DIR}/worker_multithreading.py"
     INITIAL_SERVER_PORT = 60001  # Default port used in your script
 
     # Define log paths within the Mininet nodes' filesystems
     # Using /tmp/ for simplicity, adjust if needed
-    LOG_DIR_BASE = f"{PROJECT_DIR}/logs"
+    now = datetime.datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    LOG_DIR_BASE = f"{PROJECT_DIR}/mininet_logs/{timestamp}"
     SERVER_LOG = f"{LOG_DIR_BASE}/server.log"
     WORKER0_LOG = f"{LOG_DIR_BASE}/worker0.log"
     WORKER1_LOG = f"{LOG_DIR_BASE}/worker1.log"
@@ -101,9 +102,9 @@ def run_experiment():
     # Create log directory for all hosts
     info(f"*** Creating log directory '{LOG_DIR_BASE}' on nodes...\n")
     for node in [server_node, worker0_node, worker1_node, worker2_node]:
+        # Optional: Ensure the project directory exists if needed by scripts
+        node.cmd(f"mkdir -p {PROJECT_DIR}")  # Uncomment if scripts expect it
         node.cmd(f"mkdir -p {LOG_DIR_BASE}")
-    # Optional: Ensure the project directory exists if needed by scripts
-    # node.cmd(f'mkdir -p {PROJECT_DIR}') # Uncomment if scripts expect it
 
     # --- Start the distributed ML applications ---
     info("*** Starting Server Application...\n")
@@ -115,7 +116,12 @@ def run_experiment():
 
     # Create log file for redirecting output
     os.makedirs(os.path.dirname(SERVER_LOG), exist_ok=True)
-    server_proc = server_node.popen(server_cmd.split(), stdout=open(SERVER_LOG, "w"), stderr=open(SERVER_LOG, "a"))
+    # server_node.popen(server_cmd.split(), stdout=open(SERVER_LOG, "w"), stderr=open(SERVER_LOG, "a"))
+    server_proc = server_node.popen(
+        server_cmd.split(),
+        stdout=open(SERVER_LOG, "w"),
+        stderr=open(SERVER_LOG, "a"),
+    )
 
     # Give the server a moment to start up and bind to the port
     info("*** Waiting for server to initialize...\n")
@@ -132,17 +138,29 @@ def run_experiment():
     # Worker 0
     worker0_cmd = f"{PYTHON} -u {WORKER_SCRIPT} 0 {server_ip} {INITIAL_SERVER_PORT}"
     info(f"Executing on worker0: {worker0_cmd}\n")
-    worker0_proc = worker0_node.popen(worker0_cmd.split(), stdout=open(WORKER0_LOG, "w"), stderr=open(WORKER0_LOG, "a"))
+    worker0_proc = worker0_node.popen(
+        worker0_cmd.split(),
+        stdout=open(WORKER0_LOG, "w"),
+        stderr=open(WORKER0_LOG, "a"),
+    )
 
     # Worker 1
     worker1_cmd = f"{PYTHON} -u {WORKER_SCRIPT} 1 {server_ip} {INITIAL_SERVER_PORT}"
     info(f"Executing on worker1: {worker1_cmd}\n")
-    worker1_proc = worker1_node.popen(worker1_cmd.split(), stdout=open(WORKER1_LOG, "w"), stderr=open(WORKER1_LOG, "a"))
+    worker1_proc = worker1_node.popen(
+        worker1_cmd.split(),
+        stdout=open(WORKER1_LOG, "w"),
+        stderr=open(WORKER1_LOG, "a"),
+    )
 
     # Worker 2
     worker2_cmd = f"{PYTHON} -u {WORKER_SCRIPT} 2 {server_ip} {INITIAL_SERVER_PORT}"
     info(f"Executing on worker2: {worker2_cmd}\n")
-    worker2_proc = worker2_node.popen(worker2_cmd.split(), stdout=open(WORKER2_LOG, "w"), stderr=open(WORKER2_LOG, "a"))
+    worker2_proc = worker2_node.popen(
+        worker2_cmd.split(),
+        stdout=open(WORKER2_LOG, "w"),
+        stderr=open(WORKER2_LOG, "a"),
+    )
 
     # --- End Application Start ---
 
@@ -165,6 +183,22 @@ def run_experiment():
     except KeyboardInterrupt:
         info("\n*** Keyboard interrupt received. Stopping network...")
     finally:
+        # 2. Terminate all processes in the finally block
+        print("Cleaning up processes...")
+        if server_proc:
+            print("Terminating server...")
+            server_proc.terminate()
+        if worker0_proc:
+            print("Terminating worker 0...")
+            worker0_proc.terminate()
+        # Add termination for worker1_proc and worker2_proc as well
+        if worker1_proc:
+            print("Terminating worker 1...")
+            worker1_proc.terminate()
+        if worker2_proc:
+            print("Terminating worker 2...")
+            worker2_proc.terminate()
+
         info("*** Stopping network\n")
         net.stop()
 
