@@ -4,6 +4,7 @@ import socket
 import struct
 import traceback
 import time
+import zlib
 
 # import pickle
 import numpy as np
@@ -93,7 +94,8 @@ def _check_if_told_to_stop(
 
     return False, None  # No signal received, continue sending data
 
-def _count_bits(bitmap_data):
+
+def _count_bits(bitmap_data: bytearray):
     """
     Count the number of 0's and 1's in a bitmap (bytes object).
     Returns: (count_0, count_1)
@@ -113,7 +115,7 @@ def _count_bits(bitmap_data):
     return count_0, count_1
 
 
-def _change_UDP_rate(update_rate):
+def _change_UDP_rate(update_rate: float):
     """ 
     Update UDP rate to <update_rate>
     """
@@ -124,7 +126,7 @@ def _change_UDP_rate(update_rate):
 # Global tracking
 _BYTES_SENT_THIS_SECOND = 0
 _CURRENT_SECOND = int(time.time())
-def _UDP_send_rate_control(udp_sock, packet_to_send, udp_host, udp_port):
+def _UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray, udp_host: str, udp_port: int):
     """
     A wrapper to UDP send function to add rate(flow) control
     """
@@ -161,6 +163,12 @@ def _UDP_send_rate_control(udp_sock, packet_to_send, udp_host, udp_port):
         # Throttle if we just hit the limit
         if _BYTES_SENT_THIS_SECOND >= max_bytes_per_second:
             time.sleep(1.0 - (time.time() - now))
+
+def CRC32(data: bytearray) -> int:
+    """ 
+    Given binary data, return 32bit CRC32 checksum
+    """
+    return zlib.crc32(data) & 0xFFFFFFFF
 
 
 # --- Serialization Function ---
@@ -238,8 +246,9 @@ def send_data_mlt(
                     # Check if the i-th bit in server_ack_bitmap is 0 (server hasn't acked it)
                     if not ((server_ack_bitmap[byte_idx] >> bit_idx) & 1):
                         chunk_payload = chunks[i]
+                        checksum = CRC32(chunk_payload)
                         # Header: chunk_id (0-indexed), total_chunks, payload_length_of_this_chunk
-                        header = struct.pack("!III", i, signal_counter, len(chunk_payload))
+                        header = struct.pack("!IIII", i, signal_counter, len(chunk_payload), checksum)
                         packet_to_send = header + chunk_payload
                         try:
                             # udp_sock.sendto(
@@ -457,9 +466,11 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                     print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Packet too small: {len(packet)} bytes. Ignoring.")
                     continue
 
-                # ZM 8.8.2025: CRITICAL CHANGE: check if the packet belongs to this round
-                seq, received_signal_counter, chunk_len_in_header = struct.unpack("!III", packet[:12])
+                # Unpick the packet
+                # ZM 7.20 no need to pickle/unpickle b/c pickle will increase the packet size here
+                # packet = pickle.loads(packet)
 
+                seq, received_signal_counter, chunk_len_in_header, checksum = struct.unpack("!IIII", packet[:16])
                 if received_signal_counter != expected_counter:
                     print(
                         f"[Worker {tcp_addr}] RECEIVER MLT(UDP): "
@@ -467,16 +478,28 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                         f"Ignoring packet."
                     )
                     continue
-
-                if (
-                    seq < num_chunks
-                    and received_chunks[seq] is None
-                    and len(packet[12:]) == chunk_len_in_header
-                    and received_signal_counter == expected_counter
-                ):
+                elif not seq < num_chunks:
+                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 1: Chunk #{seq} should not be be bigger than num_chunk {num_chunks}")
+                
+                elif received_chunks[seq] is not None:
+                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 2: Chunk #{seq} had been disposed already")
+                elif len(packet[16:]) != chunk_len_in_header:  
+                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 3: Chunk #{seq} length ({len(packet[16:])}) does not match size claimed in header ({chunk_len_in_header})")
+                elif CRC32(packet[16:]) != checksum:
+                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 4: Chunk #{seq} Checksum Failed")
+                else:
                     received_chunks[seq] = packet[12:]
                     byte_idx, bit_idx = divmod(seq, 8)
                     bitmap[byte_idx] |= 1 << bit_idx
+                    # if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk #{seq} is disposed")
+
+                    # if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Recv packet failed: Chunk #{seq}")
+
+                    if config.DEBUG:
+                        print(
+                            f"[Worker {tcp_addr}] RECEIVER MLT(UDP): "
+                            f"Received chunk {seq}/{num_chunks} of size {len(packet[16:])} bytes at {time_with_ms}."
+                        )
 
                     if config.DEBUG:
                         print(
