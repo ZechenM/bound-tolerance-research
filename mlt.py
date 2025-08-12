@@ -300,7 +300,7 @@ def send_data_mlt(
 
                 # Use select with a reasonable timeout for the server to respond
                 probe_cnt = 0
-                probe_response_timeout = 0.1  # seconds
+                probe_response_timeout = 1  # seconds
                 ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
 
                 while not ready_to_read:
@@ -440,7 +440,8 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
 
     has_stopped = False
     udp_recv_counter = 0
-    while None in received_chunks:
+    # while None in received_chunks:  # O(n), very slow
+    while udp_recv_counter < num_chunks:
         try:
             readable, _, _ = select.select([udp_sock, tcp_sock], [], [], 0.001)
             now = datetime.datetime.now()
@@ -460,9 +461,9 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                     print(
                         f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}) at {time_with_ms}."
                     )
-                    udp_recv_counter += 1
+                    # udp_recv_counter += 1
                 if len(packet) < 16:
-                    udp_recv_counter -= 1  # Ignore this packet, it is too small
+                    # udp_recv_counter -= 1  # Ignore this packet, it is too small
                     print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Packet too small: {len(packet)} bytes. Ignoring.")
                     continue
 
@@ -500,15 +501,10 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                             f"[Worker {tcp_addr}] RECEIVER MLT(UDP): "
                             f"Received chunk {seq}/{num_chunks} of size {len(packet[16:])} bytes at {time_with_ms}."
                         )
-
-                    if config.DEBUG:
-                        print(
-                            f"[Worker {tcp_addr}] RECEIVER MLT(UDP): "
-                            f"Received chunk {seq}/{num_chunks} of size {len(packet[12:])} bytes at {time_with_ms}."
-                        )
-
+                    udp_recv_counter += 1
+                    
                 # Check for early stop signal
-                if num_chunks > 0 and (received_chunks.count(None) / num_chunks) <= config.loss_tolerance:
+                if num_chunks > 0 and (udp_recv_counter / num_chunks) <= config.loss_tolerance:
                     if config.DEBUG:
                         print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
                     has_stopped = True
