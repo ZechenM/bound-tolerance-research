@@ -459,7 +459,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                 time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
                 if config.DEBUG:
                     print(
-                        f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}) at {time_with_ms}."
+                        f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received (pending check) UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}) at {time_with_ms}."
                     )
                     # udp_recv_counter += 1
                 if len(packet) < 16:
@@ -481,7 +481,6 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                     continue
                 elif not seq < num_chunks:
                     if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 1: Chunk #{seq} should not be be bigger than num_chunk {num_chunks}")
-                
                 elif received_chunks[seq] is not None:
                     if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 2: Chunk #{seq} had been disposed already")
                 elif len(packet[16:]) != chunk_len_in_header:  
@@ -499,7 +498,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                     if config.DEBUG:
                         print(
                             f"[Worker {tcp_addr}] RECEIVER MLT(UDP): "
-                            f"Received chunk {seq}/{num_chunks} of size {len(packet[16:])} bytes at {time_with_ms}."
+                            f"Accepted chunk #{seq} of size {len(packet[16:])} bytes at {time_with_ms}."
                         )
                     udp_recv_counter += 1
                     
