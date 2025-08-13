@@ -95,7 +95,7 @@ def _check_if_told_to_stop(
     return False, None  # No signal received, continue sending data
 
 
-def _count_bits(bitmap_data: bytearray):
+def count_bits(bitmap_data: bytearray):
     """
     Count the number of 0's and 1's in a bitmap (bytes object).
     Returns: (count_0, count_1)
@@ -115,7 +115,7 @@ def _count_bits(bitmap_data: bytearray):
     return count_0, count_1
 
 
-def _change_UDP_rate(update_rate: float):
+def change_UDP_rate(update_rate: float):
     """ 
     Update UDP rate to <update_rate>
     """
@@ -126,7 +126,7 @@ def _change_UDP_rate(update_rate: float):
 # Global tracking
 _BYTES_SENT_THIS_SECOND = 0
 _CURRENT_SECOND = int(time.time())
-def _UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray, udp_host: str, udp_port: int):
+def UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray, udp_host: str, udp_port: int):
     """
     A wrapper to UDP send function to add rate(flow) control
     """
@@ -255,7 +255,7 @@ def send_data_mlt(
                             #     (packet_to_send),
                             #     (udp_host, udp_port),
                             # )
-                            _UDP_send_rate_control(udp_sock, packet_to_send, udp_host, udp_port)
+                            UDP_send_rate_control(udp_sock, packet_to_send, udp_host, udp_port)
                             chunks_sent_this_round += 1
 
                         except Exception as e:
@@ -348,7 +348,7 @@ def send_data_mlt(
                 new_bitmap_data = utility.recv_all(tcp_sock, bitmap_len_to_recv)
 
                 if config.DEBUG: 
-                    zero_count, one_count = _count_bits(new_bitmap_data)
+                    zero_count, one_count = count_bits(new_bitmap_data)
                     print(f"SENDER MLT DEBUG: server request to resend {zero_count}/{zero_count + one_count} packets")
 
                 if not new_bitmap_data or len(new_bitmap_data) != bitmap_len_to_recv:
