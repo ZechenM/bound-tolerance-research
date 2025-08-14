@@ -3,6 +3,8 @@ import select
 import socket
 import struct
 import traceback
+import time
+import zlib
 
 # import pickle
 import numpy as np
@@ -10,7 +12,7 @@ import torch
 
 import config
 import utility
-from config import STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE
+from config import STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE, UDP_RATE
 
 
 def _recv_all(conn: socket.socket, size: int, recv_lock=None) -> bytes | None:
@@ -93,6 +95,81 @@ def _check_if_told_to_stop(
     return False, None  # No signal received, continue sending data
 
 
+def count_bits(bitmap_data: bytes | bytearray):
+    """
+    Count the number of 0's and 1's in a bitmap (bytes object).
+    Returns: (count_0, count_1)
+    """
+    count_0 = 0
+    count_1 = 0
+
+    for byte in bitmap_data:
+        # Convert byte to 8-bit binary string (e.g., '01011010')
+        for i in range(8):  # Check each of the 8 bits
+            if byte & (1 << i):  # Test if the i-th bit is set
+                count_1 += 1
+            else:
+                count_0 += 1
+
+    return count_0, count_1
+
+
+def change_UDP_rate(update_rate: float):
+    """ 
+    Update UDP rate to <update_rate>
+    """
+    global UDP_RATE
+    UDP_RATE = update_rate
+
+
+# Global tracking
+_BYTES_SENT_THIS_SECOND = 0
+_CURRENT_SECOND = int(time.time())
+def UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray, udp_host: str, udp_port: int):
+    """
+    A wrapper to UDP send function to add rate(flow) control
+    """
+    global _BYTES_SENT_THIS_SECOND, _CURRENT_SECOND, UDP_RATE
+
+    packet_size_bytes = len(packet_to_send)
+    max_bytes_per_second = UDP_RATE * 1000 * 1000 // 8  # magabits = 1000 * 1000 bits, not 1024 increment
+
+    while packet_size_bytes > 0:
+        now = int(time.time())
+        
+        # Reset counter if we're in a new second
+        if now != _CURRENT_SECOND:
+            _BYTES_SENT_THIS_SECOND = 0
+            _CURRENT_SECOND = now
+
+        # Calculate remaining allowance for this second
+        remaining_bytes = max_bytes_per_second - _BYTES_SENT_THIS_SECOND
+        
+        # If we've hit the limit, sleep until next second
+        if remaining_bytes <= 0:
+            time.sleep(1.0 - (time.time() - now))
+            continue
+
+        # Send only up to the remaining allowance
+        chunk_size = min(packet_size_bytes, remaining_bytes)
+        udp_sock.sendto(packet_to_send[:chunk_size], (udp_host, udp_port))
+        
+        # Update tracking
+        packet_to_send = packet_to_send[chunk_size:]
+        packet_size_bytes -= chunk_size
+        _BYTES_SENT_THIS_SECOND += chunk_size
+
+        # Throttle if we just hit the limit
+        if _BYTES_SENT_THIS_SECOND >= max_bytes_per_second:
+            time.sleep(max(0, 1.0 - (time.time() - now)))  # Take negative value into consideration
+
+def CRC32(data: bytes | bytearray) -> int:
+    """ 
+    Given binary data, return 32bit CRC32 checksum
+    """
+    return zlib.crc32(data) & 0xFFFFFFFF
+
+
 # --- Serialization Function ---
 def serialize_gradient_to_custom_binary(tcp_sock: socket.socket, key: str, tensor: torch.Tensor):
     """
@@ -168,14 +245,16 @@ def send_data_mlt(
                     # Check if the i-th bit in server_ack_bitmap is 0 (server hasn't acked it)
                     if not ((server_ack_bitmap[byte_idx] >> bit_idx) & 1):
                         chunk_payload = chunks[i]
+                        checksum = CRC32(chunk_payload)
                         # Header: chunk_id (0-indexed), total_chunks, payload_length_of_this_chunk
-                        header = struct.pack("!III", i, signal_counter, len(chunk_payload))
+                        header = struct.pack("!IIII", i, signal_counter, len(chunk_payload), checksum)
                         packet_to_send = header + chunk_payload
                         try:
-                            udp_sock.sendto(
-                                (packet_to_send),
-                                (udp_host, udp_port),
-                            )
+                            # udp_sock.sendto(
+                            #     (packet_to_send),
+                            #     (udp_host, udp_port),
+                            # )
+                            UDP_send_rate_control(udp_sock, packet_to_send, udp_host, udp_port)
                             chunks_sent_this_round += 1
 
                         except Exception as e:
@@ -220,7 +299,7 @@ def send_data_mlt(
 
                 # Use select with a reasonable timeout for the server to respond
                 probe_cnt = 0
-                probe_response_timeout = 0.1  # seconds
+                probe_response_timeout = 1  # seconds
                 ready_to_read, _, _ = select.select([tcp_sock], [], [], probe_response_timeout)
 
                 while not ready_to_read:
@@ -266,6 +345,10 @@ def send_data_mlt(
 
                 bitmap_len_to_recv = len(server_ack_bitmap)
                 new_bitmap_data = utility.recv_all(tcp_sock, bitmap_len_to_recv)
+
+                if config.DEBUG: 
+                    zero_count, one_count = count_bits(new_bitmap_data)
+                    print(f"SENDER MLT DEBUG: server request to resend {zero_count}/{zero_count + one_count} packets")
 
                 if not new_bitmap_data or len(new_bitmap_data) != bitmap_len_to_recv:
                     raise ConnectionError("SENDER MLT ERROR: Failed to receive complete bitmap data from server.")
@@ -352,11 +435,12 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
         raise ValueError(f"RECEIVER ERROR: Invalid number of chunks received: {num_chunks}")
     received_chunks: list[None | bytes] = [None] * num_chunks
     bitmap = bytearray((num_chunks + 7) // 8)
-    expected_packet_size = config.CHUNK_SIZE + 12  # 12-byte header
+    expected_packet_size = config.CHUNK_SIZE + 16  # 16-byte header
 
     has_stopped = False
     udp_recv_counter = 0
-    while None in received_chunks:
+    # while None in received_chunks:  # O(n), very slow
+    while udp_recv_counter < num_chunks:
         try:
             readable, _, _ = select.select([udp_sock, tcp_sock], [], [], 0.001)
             now = datetime.datetime.now()
@@ -372,19 +456,21 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                 packet, udp_addr = udp_sock.recvfrom(expected_packet_size + 100)
                 now = datetime.datetime.now()
                 time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
-                # if config.DEBUG:
-                #     print(
-                #         f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}) at {time_with_ms}."
-                #     )
-                udp_recv_counter += 1
-                if len(packet) < 12:
-                    udp_recv_counter -= 1  # Ignore this packet, it is too small
+                if config.DEBUG:
+                    print(
+                        f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Received (pending check) UDP packet of size {len(packet)} bytes ({udp_recv_counter}/{num_chunks}) at {time_with_ms}."
+                    )
+                    # udp_recv_counter += 1
+                if len(packet) < 16:
+                    # udp_recv_counter -= 1  # Ignore this packet, it is too small
                     print(f"[Worker {tcp_addr}] RECEIVER MLT(UDP): Packet too small: {len(packet)} bytes. Ignoring.")
                     continue
 
-                # ZM 8.8.2025: CRITICAL CHANGE: check if the packet belongs to this round
-                seq, received_signal_counter, chunk_len_in_header = struct.unpack("!III", packet[:12])
+                # Unpick the packet
+                # ZM 7.20 no need to pickle/unpickle b/c pickle will increase the packet size here
+                # packet = pickle.loads(packet)
 
+                seq, received_signal_counter, chunk_len_in_header, checksum = struct.unpack("!IIII", packet[:16])
                 if received_signal_counter != expected_counter:
                     print(
                         f"[Worker {tcp_addr}] RECEIVER MLT(UDP): "
@@ -392,25 +478,31 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                         f"Ignoring packet."
                     )
                     continue
-
-                if (
-                    seq < num_chunks
-                    and received_chunks[seq] is None
-                    and len(packet[12:]) == chunk_len_in_header
-                    and received_signal_counter == expected_counter
-                ):
-                    received_chunks[seq] = packet[12:]
+                elif not seq < num_chunks:
+                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 1: Chunk #{seq} should not be be bigger than num_chunk {num_chunks}")
+                elif received_chunks[seq] is not None:
+                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 2: Chunk #{seq} had been disposed already")
+                elif len(packet[16:]) != chunk_len_in_header:  
+                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 3: Chunk #{seq} length ({len(packet[16:])}) does not match size claimed in header ({chunk_len_in_header})")
+                elif CRC32(packet[16:]) != checksum:
+                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 4: Chunk #{seq} Checksum Failed")
+                else:
+                    received_chunks[seq] = packet[16:]
                     byte_idx, bit_idx = divmod(seq, 8)
                     bitmap[byte_idx] |= 1 << bit_idx
+                    # if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk #{seq} is disposed")
+
+                    # if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Recv packet failed: Chunk #{seq}")
 
                     if config.DEBUG:
                         print(
                             f"[Worker {tcp_addr}] RECEIVER MLT(UDP): "
-                            f"Received chunk {seq}/{num_chunks} of size {len(packet[12:])} bytes at {time_with_ms}."
+                            f"Accepted chunk #{seq} of size {len(packet[16:])} bytes at {time_with_ms}."
                         )
-
+                    udp_recv_counter += 1
+                    
                 # Check for early stop signal
-                if num_chunks > 0 and (received_chunks.count(None) / num_chunks) <= config.loss_tolerance:
+                if num_chunks > 0 and (udp_recv_counter / num_chunks) <= config.loss_tolerance:
                     if config.DEBUG:
                         print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
                     has_stopped = True
