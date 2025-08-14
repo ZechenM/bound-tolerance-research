@@ -95,7 +95,7 @@ def _check_if_told_to_stop(
     return False, None  # No signal received, continue sending data
 
 
-def count_bits(bitmap_data: bytearray):
+def count_bits(bitmap_data: bytes | bytearray):
     """
     Count the number of 0's and 1's in a bitmap (bytes object).
     Returns: (count_0, count_1)
@@ -105,12 +105,11 @@ def count_bits(bitmap_data: bytearray):
 
     for byte in bitmap_data:
         # Convert byte to 8-bit binary string (e.g., '01011010')
-        bits = bin(byte)[2:].zfill(8)  # [2:] removes '0b' prefix; zfill pads to 8 bits
-        for bit in bits:
-            if bit == '0':
-                count_0 += 1
-            elif bit == '1':
+        for i in range(8):  # Check each of the 8 bits
+            if byte & (1 << i):  # Test if the i-th bit is set
                 count_1 += 1
+            else:
+                count_0 += 1
 
     return count_0, count_1
 
@@ -133,7 +132,7 @@ def UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray, ud
     global _BYTES_SENT_THIS_SECOND, _CURRENT_SECOND, UDP_RATE
 
     packet_size_bytes = len(packet_to_send)
-    max_bytes_per_second = UDP_RATE * 1024 * 1024 // 8  # 100 Mbps → 12,500,000 bytes/sec
+    max_bytes_per_second = UDP_RATE * 1000 * 1000 // 8  # magabits = 1000 * 1000 bits, not 1024 increment
 
     while packet_size_bytes > 0:
         now = int(time.time())
@@ -162,9 +161,9 @@ def UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray, ud
 
         # Throttle if we just hit the limit
         if _BYTES_SENT_THIS_SECOND >= max_bytes_per_second:
-            time.sleep(1.0 - (time.time() - now))
+            time.sleep(max(0, 1.0 - (time.time() - now)))  # Take negative value into consideration
 
-def CRC32(data: bytearray) -> int:
+def CRC32(data: bytes | bytearray) -> int:
     """ 
     Given binary data, return 32bit CRC32 checksum
     """
