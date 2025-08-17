@@ -122,28 +122,104 @@ def change_UDP_rate(update_rate: float):
     UDP_RATE = update_rate
 
 
-# Global tracking
+# Global tracking (legacy rate control)
 _BYTES_SENT_THIS_SECOND = 0
 _CURRENT_SECOND = int(time.time())
+
+# TIMELY algorithm state
+class TimelyState:
+    """Maintains state for TIMELY congestion control algorithm."""
+    def __init__(self):
+        self.current_rate = config.TIMELY_INITIAL_RATE  # Mbps
+        self.prev_rtt = None  # Previous RTT measurement
+        self.rtt_gradient = 0.0  # RTT gradient
+        self.bytes_sent_this_second = 0
+        self.current_second = int(time.time())
+        
+    def update_rate(self, rtt):
+        """Update sending rate based on RTT measurement using TIMELY algorithm."""
+        if self.prev_rtt is not None:
+            # Calculate RTT gradient
+            self.rtt_gradient = (rtt - self.prev_rtt) / self.prev_rtt if self.prev_rtt > 0 else 0.0
+            
+            if config.TIMELY_DEBUG:
+                print(f"TIMELY: RTT={rtt*1e6:.1f}μs, prev_RTT={self.prev_rtt*1e6:.1f}μs, gradient={self.rtt_gradient:.4f}")
+        
+        # TIMELY algorithm logic
+        if rtt < config.TIMELY_T_LOW:
+            # Low latency: additive increase
+            self.current_rate += config.TIMELY_ALPHA
+            if config.TIMELY_DEBUG:
+                print(f"TIMELY: RTT < T_low, additive increase: {self.current_rate:.1f} Mbps")
+        elif rtt > config.TIMELY_T_HIGH:
+            # High latency: multiplicative decrease
+            self.current_rate *= config.TIMELY_BETA
+            if config.TIMELY_DEBUG:
+                print(f"TIMELY: RTT > T_high, multiplicative decrease: {self.current_rate:.1f} Mbps")
+        else:
+            # Between thresholds: use gradient
+            if self.prev_rtt is not None:
+                if self.rtt_gradient >= 0:
+                    # Increasing latency: decrease rate
+                    self.current_rate *= config.TIMELY_BETA
+                    if config.TIMELY_DEBUG:
+                        print(f"TIMELY: RTT gradient >= 0, multiplicative decrease: {self.current_rate:.1f} Mbps")
+                else:
+                    # Decreasing latency: additive increase
+                    self.current_rate += config.TIMELY_ALPHA
+                    if config.TIMELY_DEBUG:
+                        print(f"TIMELY: RTT gradient < 0, additive increase: {self.current_rate:.1f} Mbps")
+        
+        # Clamp rate to valid range
+        self.current_rate = max(config.TIMELY_MIN_RATE, 
+                               min(config.TIMELY_MAX_RATE, self.current_rate))
+        
+        # Update previous RTT
+        self.prev_rtt = rtt
+        
+        if config.TIMELY_DEBUG:
+            print(f"TIMELY: Final rate: {self.current_rate:.1f} Mbps")
+
+# Global TIMELY state instance  
+_timely_state = TimelyState()
 def UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray, udp_host: str, udp_port: int):
     """
-    A wrapper to UDP send function to add rate(flow) control
+    A wrapper to UDP send function to add rate(flow) control.
+    Uses TIMELY algorithm if enabled, otherwise falls back to fixed rate control.
     """
-    global _BYTES_SENT_THIS_SECOND, _CURRENT_SECOND, UDP_RATE
+    global _BYTES_SENT_THIS_SECOND, _CURRENT_SECOND, _timely_state
+    
+    if config.TIMELY_ENABLED:
+        # Use TIMELY rate control
+        current_rate = _timely_state.current_rate
+        max_bytes_per_second = current_rate * 1000 * 1000 // 8  # Convert Mbps to bytes/sec
+        bytes_sent_this_second = _timely_state.bytes_sent_this_second
+        current_second = _timely_state.current_second
+    else:
+        # Use legacy fixed rate control
+        current_rate = config.UDP_RATE
+        max_bytes_per_second = config.UDP_RATE * 1000 * 1000 // 8
+        bytes_sent_this_second = _BYTES_SENT_THIS_SECOND
+        current_second = _CURRENT_SECOND
 
     packet_size_bytes = len(packet_to_send)
-    max_bytes_per_second = UDP_RATE * 1000 * 1000 // 8  # magabits = 1000 * 1000 bits, not 1024 increment
 
     while packet_size_bytes > 0:
         now = int(time.time())
         
         # Reset counter if we're in a new second
-        if now != _CURRENT_SECOND:
-            _BYTES_SENT_THIS_SECOND = 0
-            _CURRENT_SECOND = now
+        if now != current_second:
+            bytes_sent_this_second = 0
+            current_second = now
+            if config.TIMELY_ENABLED:
+                _timely_state.bytes_sent_this_second = 0
+                _timely_state.current_second = now
+            else:
+                _BYTES_SENT_THIS_SECOND = 0
+                _CURRENT_SECOND = now
 
         # Calculate remaining allowance for this second
-        remaining_bytes = max_bytes_per_second - _BYTES_SENT_THIS_SECOND
+        remaining_bytes = max_bytes_per_second - bytes_sent_this_second
         
         # If we've hit the limit, sleep until next second
         if remaining_bytes <= 0:
@@ -157,10 +233,15 @@ def UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray, ud
         # Update tracking
         packet_to_send = packet_to_send[chunk_size:]
         packet_size_bytes -= chunk_size
-        _BYTES_SENT_THIS_SECOND += chunk_size
+        bytes_sent_this_second += chunk_size
+        
+        if config.TIMELY_ENABLED:
+            _timely_state.bytes_sent_this_second += chunk_size
+        else:
+            _BYTES_SENT_THIS_SECOND += chunk_size
 
         # Throttle if we just hit the limit
-        if _BYTES_SENT_THIS_SECOND >= max_bytes_per_second:
+        if bytes_sent_this_second >= max_bytes_per_second:
             time.sleep(max(0, 1.0 - (time.time() - now)))  # Take negative value into consideration
 
 def CRC32(data: bytes | bytearray) -> int:
@@ -282,17 +363,19 @@ def send_data_mlt(
                             if new_bitmap is not None and new_bitmap != server_ack_bitmap:
                                 server_ack_bitmap = new_bitmap
 
-            # --- Phase 3: Send "Probe" (P) signal via TCP ---
+            # --- Phase 3: Send "Probe" (P) signal via TCP and measure RTT ---
+            rtt_start = None
             while True:
                 # Send 'Probe' (P) and wait for 'Stop' (S) or 'Bitmap' (B)
                 if config.DEBUG:
                     # Get the current time object
                     now = datetime.datetime.now()
-
                     # Format using an f-string, calculating milliseconds from microseconds
                     time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
                     print(f"SENDER MLT: Sending 'Probe' (P) via TCP at {time_with_ms}.")
                 try:
+                    # Record probe send time for RTT measurement
+                    rtt_start = time.perf_counter()
                     utility.send_signal_tcp(tcp_sock, b"P", signal_counter)
                 except Exception as e:
                     raise ConnectionError(f"SENDER MLT ERROR: Failed to send 'Probe' (P) signal: {e}")
@@ -329,6 +412,15 @@ def send_data_mlt(
             # reset bitmap_same_from_last_round to False
             bitmap_same_from_last_round = False
             signal, received_counter = utility.recv_signal_tcp(tcp_sock)
+            
+            # Measure RTT and update TIMELY rate if enabled
+            if config.TIMELY_ENABLED and rtt_start is not None:
+                rtt_end = time.perf_counter()
+                rtt = rtt_end - rtt_start
+                _timely_state.update_rate(rtt)
+                if config.TIMELY_DEBUG:
+                    print(f"TIMELY: Measured RTT: {rtt*1e6:.1f} μs, Current rate: {_timely_state.current_rate:.1f} Mbps")
+            
             if not signal:
                 raise ConnectionError("SENDER MLT ERROR: Connection closed by receiver while waiting for response.")
 
