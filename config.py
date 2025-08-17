@@ -90,3 +90,4 @@ TIMELY_BETA = 0.8      # Multiplicative decrease factor
 TIMELY_INITIAL_RATE = 10  # Initial sending rate in Mbps
 TIMELY_MIN_RATE = 1    # Minimum sending rate in Mbps  
 TIMELY_MAX_RATE = 10000 # Maximum sending rate in Mbps
+TIMELY_DEBUG = False   # Enable detailed TIMELY debug output

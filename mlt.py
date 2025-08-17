@@ -142,19 +142,19 @@ class TimelyState:
             # Calculate RTT gradient
             self.rtt_gradient = (rtt - self.prev_rtt) / self.prev_rtt if self.prev_rtt > 0 else 0.0
             
-            if config.DEBUG:
+            if config.TIMELY_DEBUG:
                 print(f"TIMELY: RTT={rtt*1e6:.1f}μs, prev_RTT={self.prev_rtt*1e6:.1f}μs, gradient={self.rtt_gradient:.4f}")
         
         # TIMELY algorithm logic
         if rtt < config.TIMELY_T_LOW:
             # Low latency: additive increase
             self.current_rate += config.TIMELY_ALPHA
-            if config.DEBUG:
+            if config.TIMELY_DEBUG:
                 print(f"TIMELY: RTT < T_low, additive increase: {self.current_rate:.1f} Mbps")
         elif rtt > config.TIMELY_T_HIGH:
             # High latency: multiplicative decrease
             self.current_rate *= config.TIMELY_BETA
-            if config.DEBUG:
+            if config.TIMELY_DEBUG:
                 print(f"TIMELY: RTT > T_high, multiplicative decrease: {self.current_rate:.1f} Mbps")
         else:
             # Between thresholds: use gradient
@@ -162,12 +162,12 @@ class TimelyState:
                 if self.rtt_gradient >= 0:
                     # Increasing latency: decrease rate
                     self.current_rate *= config.TIMELY_BETA
-                    if config.DEBUG:
+                    if config.TIMELY_DEBUG:
                         print(f"TIMELY: RTT gradient >= 0, multiplicative decrease: {self.current_rate:.1f} Mbps")
                 else:
                     # Decreasing latency: additive increase
                     self.current_rate += config.TIMELY_ALPHA
-                    if config.DEBUG:
+                    if config.TIMELY_DEBUG:
                         print(f"TIMELY: RTT gradient < 0, additive increase: {self.current_rate:.1f} Mbps")
         
         # Clamp rate to valid range
@@ -177,7 +177,7 @@ class TimelyState:
         # Update previous RTT
         self.prev_rtt = rtt
         
-        if config.DEBUG:
+        if config.TIMELY_DEBUG:
             print(f"TIMELY: Final rate: {self.current_rate:.1f} Mbps")
 
 # Global TIMELY state instance  
@@ -418,7 +418,7 @@ def send_data_mlt(
                 rtt_end = time.perf_counter()
                 rtt = rtt_end - rtt_start
                 _timely_state.update_rate(rtt)
-                if config.DEBUG:
+                if config.TIMELY_DEBUG:
                     print(f"TIMELY: Measured RTT: {rtt*1e6:.1f} μs, Current rate: {_timely_state.current_rate:.1f} Mbps")
             
             if not signal:
