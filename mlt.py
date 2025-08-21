@@ -155,7 +155,7 @@ def high_precision_sleep(duration: float):
         # For sub-millisecond waits, busy-wait is more precise
 
 
-def UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray, 
+def UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray | bytes, 
                          udp_host: str, udp_port: int):
     """
     A wrapper to UDP send function to add rate control with configurable granularity
