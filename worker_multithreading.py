@@ -17,8 +17,8 @@ resume_from_checkpoint = False
 
 train_args = TrainingArguments(
     num_train_epochs=2,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
+    per_device_train_batch_size=2,
+    per_device_eval_batch_size=2,
     weight_decay=0.01,
     learning_rate=0.001,
     logging_steps=10,
@@ -28,7 +28,7 @@ train_args = TrainingArguments(
     load_best_model_at_end=False,
     dataloader_pin_memory=True,  # Enable pin_memory for faster data transfer to GPU
     report_to="none",
-    logging_first_step=True,  # Log metrics for the first step
+    logging_first_step=False,  # Log metrics for the first step
     # fp8=True,
 )
 

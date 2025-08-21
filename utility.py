@@ -93,3 +93,28 @@ def receive_data_tcp(sock):
         return pickle.loads(serialized_data)
     except Exception as e:
         raise ValueError(f"Error receiving data: {e}")
+
+
+# CLR (Critical Learning Regime) utility functions
+_current_loss_tolerance = None  # Will be initialized when first called
+
+def init_loss_tolerance(base_value):
+    """Initialize the current loss tolerance value"""
+    global _current_loss_tolerance
+    _current_loss_tolerance = base_value
+    print(f"[Utility] Initialized loss_tolerance to: {base_value}")
+
+def update_loss_tolerance(new_value):
+    """Update the current loss tolerance value dynamically"""
+    global _current_loss_tolerance
+    _current_loss_tolerance = new_value
+    print(f"[Utility] Updated loss_tolerance to: {new_value}")
+
+def get_current_loss_tolerance():
+    """Get the current loss tolerance value"""
+    global _current_loss_tolerance
+    if _current_loss_tolerance is None:
+        # Initialize with default value if not set
+        from config import loss_tolerance
+        init_loss_tolerance(loss_tolerance)
+    return _current_loss_tolerance

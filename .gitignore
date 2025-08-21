@@ -188,3 +188,4 @@ a.out
 mininet/a.py
 mininet/b.py
 legacy
+*.zip

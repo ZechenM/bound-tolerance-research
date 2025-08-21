@@ -14,7 +14,7 @@ import torch
 
 
 # config 2: debug mode
-DEBUG = 1
+DEBUG = 0
 
 
 # config 3: model
@@ -26,10 +26,23 @@ DEBUG = 1
 protocol = ["TCP", "MLT"][1]
 
 # config 6: bounded-loss tolerance
-loss_tolerance = 0
+loss_tolerance = 0.001 # 0.1% loss tolerance
 CHUNK_SIZE = 8192  # Size of each chunk to send over the network, in bytes
 
-# config 7: Mappings for Dtypes
+# config 7: CLR (Critical Learning Regime) configurations
+USE_CLR = True  # Enable/disable CLR detection to save computation
+CLR_eta = 0.5  # Threshold for CLR detection
+CLR_freq = 1000  # Detection frequency in communication rounds
+
+# Dynamic loss tolerance that can be updated during runtime
+# Note: Functions are now in utility.py for better organization
+current_loss_tolerance = loss_tolerance
+
+# Initialize utility functions with default values
+import utility
+utility.init_loss_tolerance(loss_tolerance)
+
+# config 8: Mappings for Dtypes
 # These mappings help convert between torch.dtype, its string representation,
 # and the corresponding numpy.dtype needed for some operations.
 
@@ -67,13 +80,13 @@ TORCH_TO_NUMPY_DTYPE = {
 
 STR_TO_NUMPY_DTYPE = {str(k): v for k, v in TORCH_TO_NUMPY_DTYPE.items()}
 
-# config 8: drop rate
+# config 9: drop rate
 BEGIN_DROP = 0.0
 MID_DROP = 0.0
 FINAL_DROP = 0.0
 
-# config 9: tcp max retries
+# config 10: tcp max retries
 TCP_MAX_RETRIES = 3  # Maximum number of retries for TCP connections
 
-# config 10: timeout
+# config 11: timeout
 probe_response_timeout = 0.001  # Timeout for probe responses in seconds

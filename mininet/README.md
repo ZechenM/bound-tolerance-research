@@ -56,7 +56,7 @@ source .venv/bin/activate
 ```
 
 2. Update `PYTHON = "/root/share/.venv/bin/python3.12"`in `distributed_ml_topo.py`
-2. in another shell in the project home directory, run:
+3. in another shell in the project home directory, run:
 
 ```bash
 sudo python3 mininet/distributed_ml_topo.py
@@ -68,3 +68,19 @@ sudo python3 mininet/distributed_ml_topo.py
 tail -F logs/server.log
 tail -F logs/worker{i}.log
 ```
+
+
+
+If ERROR:openflow.of_01: You may have another controller running.
+ERROR:openflow.of_01: Use openflow.of_01 --port=`<port>` to run POX on another port.
+^CINFO:core:Going down...
+
+then run
+
+```python
+ps aux | grep pox
+pkill -f pox
+./pox/pox.py forwarding.l2_learning
+```
+
+to kill stale pox and start again

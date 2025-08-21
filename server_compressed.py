@@ -27,19 +27,7 @@ class Server:
         self.worker_eval_acc = []
         self.worker_epochs = []
 
-        # CLR configurations
-        self.CLR_lst = [] # list of (#th batch from begining, is_CLR_batch, CLR_curr_grad_norm)
-        # for example, CLR_lst = [(10, True, 1.0), (20, False, 0.5), (30, True, 1.5)]
-        self.CLR_eta = 0.5
-        self.CLR_iter_count = 0 # count the number of batches from begining
-        self.is_CLR_batch = True # default to True, so that the first batch will be detected as CLR
-        self.CLR_freq = 10 # update every 10 mini batch
-        self.CLR_prev_grad_norm = 0.0
-        self.CLR_curr_grad_norm = 0.0
-        # Accordion detect CLR per 10 epoch on CIFAR-10. That is, its compression strategy is unchanged across 10 epochs.
-        # But their compression is operated on per parameter of the model, or each parameter can have diff compression strategy.
-        # I guess in our case, we surely can decide per 10 epoch or per epoch(I prefer this), and then decide the MLT tolerance value
-        # base on this CLR knowledge.
+
 
     
         self.drop_rate = 0.0  # X% probability to zero out gradients
@@ -68,19 +56,7 @@ class Server:
         self.run_server()
         # Thread(target=self.handle_user_input, daemon=True).start()
     
-    def is_CLR(self, curr_grad_dict):
-        self.CLR_prev_grad_norm = self.CLR_curr_grad_norm
-        
-        all_grads = torch.cat([grad.flatten() for grad in curr_grad_dict.values()])
-        self.CLR_curr_grad_norm = torch.norm(all_grads)
 
-        if self.CLR_iter_count != 0 and self.CLR_prev_grad_norm != 0:
-            if abs(self.CLR_curr_grad_norm - self.CLR_prev_grad_norm) / self.CLR_prev_grad_norm >= self.CLR_eta:
-                return True
-            else:
-                return False
-        else:
-            return True
 
     def write_to_server_port(self):
         print("Writing server port to .server_port file...")
@@ -301,21 +277,7 @@ class Server:
         
         # at this point avg gradient should be ready.
         
-        # CLR Detection using fast gradient norm calculation
-        self.CLR_iter_count += 1
-        if self.CLR_iter_count % self.CLR_freq == 0:
-            if self.worker_epochs:  # Check if we have epoch information
-                current_epoch = 0 # TODO: get current epoch number
-                self.is_CLR_batch = self.is_CLR(avg_gradients)
-                
-                if self.is_CLR_batch:
-                    print(f"CLR behavior detected at epoch {current_epoch}")
-                    print(f"Previous grad norm: {self.CLR_prev_grad_norm:.6f}")
-                    print(f"Current grad norm: {self.CLR_curr_grad_norm:.6f}")
-                    if self.CLR_prev_grad_norm > 0:
-                        relative_change = abs(self.CLR_curr_grad_norm - self.CLR_prev_grad_norm) / self.CLR_prev_grad_norm
-                        print(f"Relative change: {relative_change:.6f} (threshold: {self.CLR_eta})")
-                    self.CLR_lst.append((self.CLR_iter_count, self.is_CLR_batch, self.CLR_curr_grad_norm))
+
 
         # Send averaged gradients back to all workers
         for conn in self.connections:

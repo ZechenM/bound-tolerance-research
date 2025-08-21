@@ -310,6 +310,19 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
     final_gradients_dict = {}
     tcp_sock = socks["tcp"]
     udp_sock = socks["udp"]
+    
+    # Fix: Use TCP address host part, but preserve UDP actual port
+    tcp_host, _ = tcp_addr
+    
+    # Try to get actual bound address and port from UDP socket
+    try:
+        udp_addr = udp_sock.getsockname()
+        if udp_addr[0] == "0.0.0.0":
+            # If bound to 0.0.0.0, use TCP host
+            udp_addr = (tcp_host, udp_addr[1])
+    except:
+        # If getting fails, use TCP host and default port
+        udp_addr = (tcp_host, 0)
 
     dtype_str = "torch.float32"
     torch_dtype = STR_TO_TORCH_DTYPE.get(dtype_str, None)
@@ -369,7 +382,8 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                         f"UDP socket is readable. "
                         f"Waiting for data from sender at {time_with_ms}..."
                     )
-                packet, udp_addr = udp_sock.recvfrom(expected_packet_size + 100)
+                packet, received_udp_addr = udp_sock.recvfrom(expected_packet_size + 100)
+                udp_addr = received_udp_addr  # 
                 now = datetime.datetime.now()
                 time_with_ms = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d}"
                 # if config.DEBUG:
@@ -410,9 +424,9 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                         )
 
                 # Check for early stop signal
-                if num_chunks > 0 and (received_chunks.count(None) / num_chunks) <= config.loss_tolerance:
+                if num_chunks > 0 and (received_chunks.count(None) / num_chunks) <= utility.get_current_loss_tolerance():
                     if config.DEBUG:
-                        print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
+                        print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({utility.get_current_loss_tolerance()}) met. Sending 'Stop' (S).")
                     has_stopped = True
 
                     # Send the stop signal
@@ -446,9 +460,9 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                             f"[Worker {tcp_addr}] RECEIVER MLT: Received 'Probe' (P) signal with counter {received_counter} from sender at {time_with_ms}."
                         )
 
-                    if (received_chunks.count(None) / num_chunks) <= config.loss_tolerance:
+                    if (received_chunks.count(None) / num_chunks) <= utility.get_current_loss_tolerance():
                         if config.DEBUG:
-                            print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
+                            print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({utility.get_current_loss_tolerance()}) met. Sending 'Stop' (S).")
                         has_stopped = True
 
                         utility.send_signal_tcp(tcp_sock, b"S", received_counter)
@@ -524,4 +538,9 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
         if config.DEBUG:
             print(f"[Worker {tcp_addr}] RECONSTRUCTION: Success for key '{key}'.")
 
+    # Fix: Ensure udp_addr has a value, use reasonable default
+    if udp_addr is None or udp_addr[0] == "0.0.0.0":
+        print(f"[Worker {tcp_addr}] WARNING: No valid UDP address received, using TCP host as reference")
+        udp_addr = (tcp_host, 0)
+    
     return final_gradients_dict, udp_addr
