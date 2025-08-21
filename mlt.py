@@ -114,6 +114,12 @@ def count_bits(bitmap_data: bytes | bytearray):
     return count_0, count_1
 
 
+# --- UDP Rate Control Functions ---
+# Global tracking
+_BYTES_SENT_THIS_INTERVAL = 0
+_INTERVAL_START_TIME = time.perf_counter()
+_GRANULARITY = 0.1
+
 def change_UDP_rate(update_rate: float):
     """ 
     Update UDP rate to <update_rate>
@@ -122,47 +128,83 @@ def change_UDP_rate(update_rate: float):
     UDP_RATE = update_rate
 
 
-# Global tracking
-_BYTES_SENT_THIS_SECOND = 0
-_CURRENT_SECOND = int(time.time())
-def UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray, udp_host: str, udp_port: int):
+def set_granularity(gran: float):
     """
-    A wrapper to UDP send function to add rate(flow) control
+    Set the granularity for rate control
+    gran: time interval in seconds (e.g., 0.1 for 100ms intervals)
     """
-    global _BYTES_SENT_THIS_SECOND, _CURRENT_SECOND, UDP_RATE
+    global _GRANULARITY, _INTERVAL_START_TIME, _BYTES_SENT_THIS_INTERVAL
+    _GRANULARITY = max(0.001, gran)  # Minimum 1ms granularity
+    _INTERVAL_START_TIME = time.perf_counter()  # Reset interval timer
+    _BYTES_SENT_THIS_INTERVAL = 0  # Reset byte counter
+
+
+def high_precision_sleep(duration: float):
+    """
+    High precision sleep for very short durations (< 1ms)
+    Uses busy-waiting for better accuracy
+    """
+    if duration <= 0:
+        return
+        
+    start = time.perf_counter()
+    while time.perf_counter() - start < duration:
+        # Yield to other threads for very short waits
+        if duration > 0.001:  # For waits > 1ms, use time.sleep
+            time.sleep(min(duration / 10, 0.0001))
+        # For sub-millisecond waits, busy-wait is more precise
+
+
+def UDP_send_rate_control(udp_sock: socket.socket, packet_to_send: bytearray, 
+                         udp_host: str, udp_port: int):
+    """
+    A wrapper to UDP send function to add rate control with configurable granularity
+    using high-precision timing with perf_counter()
+    """
+    global _BYTES_SENT_THIS_INTERVAL, _INTERVAL_START_TIME, UDP_RATE, _GRANULARITY
 
     packet_size_bytes = len(packet_to_send)
-    max_bytes_per_second = UDP_RATE * 1000 * 1000 // 8  # magabits = 1000 * 1000 bits, not 1024 increment
+    max_bytes_per_interval = (UDP_RATE * 1000 * 1000 // 8) * _GRANULARITY  # Bytes per interval
 
     while packet_size_bytes > 0:
-        now = int(time.time())
+        current_time = time.perf_counter()
+        elapsed = current_time - _INTERVAL_START_TIME
         
-        # Reset counter if we're in a new second
-        if now != _CURRENT_SECOND:
-            _BYTES_SENT_THIS_SECOND = 0
-            _CURRENT_SECOND = now
+        # Reset counter if we're in a new interval
+        if elapsed >= _GRANULARITY:
+            _BYTES_SENT_THIS_INTERVAL = 0
+            _INTERVAL_START_TIME = current_time
+            elapsed = 0.0
 
-        # Calculate remaining allowance for this second
-        remaining_bytes = max_bytes_per_second - _BYTES_SENT_THIS_SECOND
+        # Calculate remaining allowance for this interval
+        remaining_bytes = max_bytes_per_interval - _BYTES_SENT_THIS_INTERVAL
         
-        # If we've hit the limit, sleep until next second
+        # If we've hit the limit, sleep until next interval
         if remaining_bytes <= 0:
-            time.sleep(1.0 - (time.time() - now))
+            sleep_time = _GRANULARITY - elapsed
+            if sleep_time > 0:
+                high_precision_sleep(sleep_time)  # Use high-precision sleep here
             continue
 
         # Send only up to the remaining allowance
-        chunk_size = min(packet_size_bytes, remaining_bytes)
+        chunk_size = int(min(packet_size_bytes, remaining_bytes))
         udp_sock.sendto(packet_to_send[:chunk_size], (udp_host, udp_port))
         
         # Update tracking
         packet_to_send = packet_to_send[chunk_size:]
         packet_size_bytes -= chunk_size
-        _BYTES_SENT_THIS_SECOND += chunk_size
+        _BYTES_SENT_THIS_INTERVAL += chunk_size
 
         # Throttle if we just hit the limit
-        if _BYTES_SENT_THIS_SECOND >= max_bytes_per_second:
-            time.sleep(max(0, 1.0 - (time.time() - now)))  # Take negative value into consideration
+        if _BYTES_SENT_THIS_INTERVAL >= max_bytes_per_interval:
+            current_time_after_send = time.perf_counter()
+            elapsed_after_send = current_time_after_send - _INTERVAL_START_TIME
+            sleep_time = max(0, _GRANULARITY - elapsed_after_send)
+            if sleep_time > 0:
+                high_precision_sleep(sleep_time)  # And here too
 
+
+# --- Checksum Function ---
 def CRC32(data: bytes | bytearray) -> int:
     """ 
     Given binary data, return 32bit CRC32 checksum
@@ -259,6 +301,7 @@ def send_data_mlt(
 
                         except Exception as e:
                             # Log UDP send error but continue; rely on bitmap retransmission
+                            traceback.print_exc()
                             print(f"SENDER MLT: UDP sendto error for chunk {i}: {e}")
 
                         if config.DEBUG:
@@ -502,7 +545,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                     udp_recv_counter += 1
                     
                 # Check for early stop signal
-                if num_chunks > 0 and (udp_recv_counter / num_chunks) <= config.loss_tolerance:
+                if num_chunks > 0 and (udp_recv_counter / num_chunks) >= (1 - config.loss_tolerance):
                     if config.DEBUG:
                         print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
                     has_stopped = True
@@ -538,7 +581,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                             f"[Worker {tcp_addr}] RECEIVER MLT: Received 'Probe' (P) signal with counter {received_counter} from sender at {time_with_ms}."
                         )
 
-                    if (received_chunks.count(None) / num_chunks) <= config.loss_tolerance:
+                    if num_chunks > 0 and (udp_recv_counter / num_chunks) >= (1 - config.loss_tolerance):
                         if config.DEBUG:
                             print(f"[Worker {tcp_addr}] RECEIVER MLT: Loss tolerance ({config.loss_tolerance}) met. Sending 'Stop' (S).")
                         has_stopped = True
