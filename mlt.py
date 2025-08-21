@@ -301,7 +301,6 @@ def send_data_mlt(
 
                         except Exception as e:
                             # Log UDP send error but continue; rely on bitmap retransmission
-                            traceback.print_exc()
                             print(f"SENDER MLT: UDP sendto error for chunk {i}: {e}")
 
                         if config.DEBUG:
