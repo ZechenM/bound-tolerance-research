@@ -52,6 +52,11 @@
 
   - Runs after gradient averaging is complete
   - Minimal impact on training performance
+- **Time Tracking**: All CLR events are timestamped with millisecond precision
+
+  - CLR detection events include precise timestamps (YYYY-MM-DD HH:MM:SS.mmm format)
+  - Loss tolerance changes are also timestamped for complete audit trail
+  - Enables precise analysis of CLR timing and duration
 
 **Loss-Tolerance Control:**
 

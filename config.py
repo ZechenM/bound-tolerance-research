@@ -14,7 +14,7 @@ import torch
 
 
 # config 2: debug mode
-DEBUG = 0
+DEBUG = 1
 
 
 # config 3: model
@@ -32,7 +32,7 @@ CHUNK_SIZE = 8192  # Size of each chunk to send over the network, in bytes
 # config 7: CLR (Critical Learning Regime) configurations
 USE_CLR = True  # Enable/disable CLR detection to save computation
 CLR_eta = 0.5  # Threshold for CLR detection
-CLR_freq = 1000  # Detection frequency in communication rounds
+CLR_freq = 10  # Detection frequency in communication rounds
 
 # Dynamic loss tolerance that can be updated during runtime
 # Note: Functions are now in utility.py for better organization

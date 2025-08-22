@@ -74,12 +74,13 @@ class Server:
         self.CLR_curr_grad_norm = torch.norm(all_grads)
 
         if self.CLR_iter_count != 0 and self.CLR_prev_grad_norm != 0:
-            if abs(self.CLR_curr_grad_norm - self.CLR_prev_grad_norm) / self.CLR_prev_grad_norm >= self.CLR_eta:
-                return True
-            else:
-                return False
+            relative_change = abs(self.CLR_curr_grad_norm - self.CLR_prev_grad_norm) / self.CLR_prev_grad_norm
+            if relative_change >= self.CLR_eta:
+                return True, relative_change
+            else:   
+                return False, relative_change
         else:
-            return True
+            return True, 0.0
 
     def write_to_server_port(self):
         print("Writing server TCP port to .server_port file...")
@@ -150,18 +151,23 @@ class Server:
                 if config.USE_CLR:
                     self.CLR_iter_count += 1
                     if self.CLR_iter_count % self.CLR_freq == 0:
-                        # Get current epoch from worker data if available
+                        # Get current timestamp
+                        import datetime
+                        start_time = datetime.datetime.now()
+                        self.CLR_iter_count += 1
+                                                # Get current epoch from worker data if available
                         # TODO: leave it for future work since our machines only train for < 5 epochs
                         current_epoch = 0  # TODO: get current epoch number from worker data
-                        self.is_CLR_iter = self.is_CLR(averaged_gradients)
-                        
+                        self.is_CLR_iter, relative_change = self.is_CLR(averaged_gradients)
+                        end_time = datetime.datetime.now()
+                        duration = end_time - start_time    
+                         
                         if self.is_CLR_iter:
                             print(f"[Aggregator] CLR behavior detected at epoch {current_epoch}")
                             print(f"[Aggregator] Previous grad norm: {self.CLR_prev_grad_norm:.6f}")
                             print(f"[Aggregator] Current grad norm: {self.CLR_curr_grad_norm:.6f}")
-                            if self.CLR_prev_grad_norm > 0:
-                                relative_change = abs(self.CLR_curr_grad_norm - self.CLR_prev_grad_norm) / self.CLR_prev_grad_norm
-                                print(f"[Aggregator] Relative change: {relative_change:.6f} (threshold: {self.CLR_eta})")
+                            print(f"[Aggregator] Relative change: {relative_change:.6f} (threshold: {self.CLR_eta})")
+                            print(f"[Aggregator] CLR time taken: {duration.total_seconds():.5f} seconds")
                             self.CLR_lst.append((self.CLR_iter_count, self.is_CLR_iter, self.CLR_curr_grad_norm))
                             
                             # Reset counter for CLR loss tolerance duration
