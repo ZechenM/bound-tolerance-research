@@ -155,15 +155,15 @@ class Server:
                         import datetime
                         start_time = datetime.datetime.now()
                         self.CLR_iter_count += 1
-                                                # Get current epoch from worker data if available
+                        # Get current epoch from worker data if available
                         # TODO: leave it for future work since our machines only train for < 5 epochs
-                        current_epoch = 0  # TODO: get current epoch number from worker data
+                        # current_epoch = 0  # TODO: get current epoch number from worker data
                         self.is_CLR_iter, relative_change = self.is_CLR(averaged_gradients)
                         end_time = datetime.datetime.now()
                         duration = end_time - start_time    
                          
                         if self.is_CLR_iter:
-                            print(f"[Aggregator] CLR behavior detected at epoch {current_epoch}")
+                            # print(f"[Aggregator] CLR behavior detected at epoch {current_epoch}")
                             print(f"[Aggregator] Previous grad norm: {self.CLR_prev_grad_norm:.6f}")
                             print(f"[Aggregator] Current grad norm: {self.CLR_curr_grad_norm:.6f}")
                             print(f"[Aggregator] Relative change: {relative_change:.6f} (threshold: {self.CLR_eta})")
