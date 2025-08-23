@@ -90,3 +90,6 @@ TCP_MAX_RETRIES = 3  # Maximum number of retries for TCP connections
 
 # config 11: timeout
 probe_response_timeout = 0.001  # Timeout for probe responses in seconds
+
+# config 11: UDP send rate
+UDP_RATE = 100  # Mbps
