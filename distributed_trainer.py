@@ -7,7 +7,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import Trainer
 
-import mlt
 
 
 def custom_collate_fn(batch):
