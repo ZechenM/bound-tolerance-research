@@ -27,7 +27,7 @@ protocol = ["TCP", "MLT"][1]
 
 # config 6: bounded-loss tolerance
 loss_tolerance = 0
-CHUNK_SIZE = 8192  # Size of each chunk to send over the network, in bytes
+CHUNK_SIZE = 8192 # Size of each chunk to send over the network, in bytes
 
 # config 7: Mappings for Dtypes
 # These mappings help convert between torch.dtype, its string representation,
@@ -79,4 +79,4 @@ TCP_MAX_RETRIES = 3  # Maximum number of retries for TCP connections
 probe_response_timeout = 0.001  # Timeout for probe responses in seconds
 
 # config 11: UDP send rate
-UDP_RATE = 100  # Mbps
+UDP_RATE = 10  # Mbps

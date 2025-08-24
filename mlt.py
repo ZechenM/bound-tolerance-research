@@ -13,6 +13,7 @@ import torch
 import config
 import utility
 from config import STR_TO_NUMPY_DTYPE, STR_TO_TORCH_DTYPE, UDP_RATE
+import timely
 
 
 def _recv_all(conn: socket.socket, size: int, recv_lock=None) -> bytes | None:
@@ -59,18 +60,19 @@ def _check_if_told_to_stop(
     Polls a socket to check if it is ready for reading.
     Returns True if the received signal is 'S' (Stop)
     Returns not None if received signal is 'B' (Bitmap) and updates the server_ack_bitmap.
+    Returns not None if received signal is 'R' (RTT measurement) and returns the RTT end time.
     """
     ready_to_read, _, _ = select.select([sock], [], [], timeout)
     if sock in ready_to_read:
         signal, received_counter = utility.recv_signal_tcp(sock)  # Read just 1 byte non-blockingly (due to select)
         if received_counter != expected_counter:
             print(f"MLT: Warning - Received counter {received_counter} does not match expected counter {expected_counter}.")
-            return False, None
+            return False, None, None
         if not signal:  # Connection closed
             raise ConnectionError("MLT HELPER: Connection closed by receiver during early check.")
         if signal == b"S":
             print("MLT HELPER: Received early 'Stop' (S) from server. Transmission for this gradient complete.")
-            return True, None
+            return True, None, None
         elif signal == b"B":
             print("MLT HELPER: Received 'Bitmap' (B) signal, receiving bitmap.")
 
@@ -85,14 +87,17 @@ def _check_if_told_to_stop(
 
             server_ack_bitmap = bytearray(new_bitmap_data)
 
-            return False, server_ack_bitmap  # Continue sending data
+            return False, server_ack_bitmap, None  # Continue sending data
+        elif signal == b"R":
+            rtt_end_time = time.perf_counter()
+            return False, None, rtt_end_time
         else:
             # This is unexpected if sender only sends S/B in response to P.
             # Could log or handle as an error. For now, we might proceed,
             # but it could indicate a de-sync.
             print(f"MLT: Warning - Unexpected TCP data '{signal}' during early check. Proceeding with caution.")
 
-    return False, None  # No signal received, continue sending data
+    return False, None, None  # No signal received, continue sending data
 
 
 def count_bits(bitmap_data: bytes | bytearray):
@@ -261,6 +266,9 @@ def send_data_mlt(
     num_chunks = len(chunks)
     if num_chunks <= 0:
         raise ValueError("SENDER MLT: No chunks to send. Exiting.")
+    
+    # Instantiate Timely controller for rate control
+    timely_controller = timely.TimelyRateController()
 
     try:
         # -------------- (DEPRECATED) TCP Phase: Send Metadata --------------
@@ -282,6 +290,8 @@ def send_data_mlt(
                 if config.DEBUG:
                     print("SENDER MLT: Skipping chunk sending loop due to same bitmap from last round.")
             else:
+                rtt_start_time = time.perf_counter()
+                
                 for i in range(num_chunks):
                     byte_idx, bit_idx = divmod(i, 8)
                     # Check if the i-th bit in server_ack_bitmap is 0 (server hasn't acked it)
@@ -314,15 +324,34 @@ def send_data_mlt(
                         # Check if the sender has sent a 'Stop' (S) or 'Bitmap' (B) signal
                         if config.DEBUG:
                             print(f"SENDER MLT: Checking for 'Stop' signal at chunk {i}/{num_chunks}.")
-                        cond, new_bitmap = _check_if_told_to_stop(tcp_sock, signal_counter, server_ack_bitmap)
+                        cond, new_bitmap, pot_rtt_end_time = _check_if_told_to_stop(tcp_sock, signal_counter, server_ack_bitmap)
                         if cond:
                             if config.DEBUG:
                                 print("SENDER MLT: 'Stop' signal received at the beginning of for loop. Transmission COMPLETED.")
                                 print(f"SENDER MLT: Sent {chunks_sent_this_round} UDP chunks this round")
                             return True
-                        else:
-                            if new_bitmap is not None and new_bitmap != server_ack_bitmap:
+                        elif new_bitmap is not None:
+                            if new_bitmap != server_ack_bitmap:
                                 server_ack_bitmap = new_bitmap
+                        elif pot_rtt_end_time is not None:
+                            # calculate new RTT
+                            new_rtt = pot_rtt_end_time - rtt_start_time
+                            print(f"SENDER MLT: New RTT calculated: {new_rtt}")
+                            
+                            # apply Timely algorithm to update sending rate
+                            new_rtt_us = new_rtt * 1e6
+                            rtt_update_result = timely_controller.on_ack_received(new_rtt_us)
+                            if rtt_update_result:
+                                print(f"SENDER MLT: Timely rate adjustment reason: {rtt_update_result}")
+
+                            # Update global UDP_RATE
+                            new_rate = timely_controller.get_sending_rate_mbps()
+                            change_UDP_rate(new_rate)
+                            print(f"SENDER MLT: Updated UDP sending rate to {new_rate} Mbps")
+                            
+                            # reset rtt_start_time for next round
+                            rtt_start_time = time.perf_counter()
+                                
 
             # --- Phase 3: Send "Probe" (P) signal via TCP ---
             while True:
@@ -409,7 +438,22 @@ def send_data_mlt(
                     no_progress_rounds = 0
 
                 server_ack_bitmap = bytearray(new_bitmap_data)
-
+            elif signal == b"R":
+                # 2584 % 100 = 84, and this is where we are handling the 84 
+                rtt_end_time = time.perf_counter()
+                new_rtt = rtt_end_time - rtt_start_time
+                print(f"SENDER MLT: New RTT calculated: {new_rtt}")
+                
+                new_rtt_us = new_rtt * 1e6
+                rtt_update_result = timely_controller.on_ack_received(new_rtt_us)
+                if rtt_update_result:
+                    print(f"SENDER MLT: Timely rate adjustment reason: {rtt_update_result}")
+                
+                new_rate = timely_controller.get_sending_rate_mbps()
+                change_UDP_rate(new_rate)
+                print(f"SENDER MLT: Updated UDP sending rate to {new_rate} Mbps")
+                
+                rtt_start_time = time.perf_counter()
             else:
                 print(f"SENDER MLT ERROR: Unrecognized signal '{signal}' from receiver.")
                 return False
@@ -427,7 +471,8 @@ def send_data_mlt(
 # keep track of themselves
 # ZM 8.9.2025: metadata_list includes num_chunks which will be part
 # of the local variable that workers and servers keep track of themselves
-def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_list: list, num_chunks: int) -> tuple[dict | None, tuple] | None:
+def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_list: list, num_chunks: int) -> tuple[dict | 
+                                                                                                                      None, tuple] | None:
     """
     Receives gradient data using the MLT protocol.
     Returns a dictionary of reconstructed gradients.
@@ -481,7 +526,7 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
 
     has_stopped = False
     udp_recv_counter = 0
-    # while None in received_chunks:  # O(n), very slow
+
     while udp_recv_counter < num_chunks:
         try:
             readable, _, _ = select.select([udp_sock, tcp_sock], [], [], 0.001)
@@ -521,13 +566,13 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                     )
                     continue
                 elif not seq < num_chunks:
-                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 1: Chunk #{seq} should not be be bigger than num_chunk {num_chunks}")
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 1: Chunk #{seq} should not be be bigger than num_chunk {num_chunks}")
                 elif received_chunks[seq] is not None:
-                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 2: Chunk #{seq} had been disposed already")
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 2: Chunk #{seq} had been disposed already")
                 elif len(packet[16:]) != chunk_len_in_header:  
-                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 3: Chunk #{seq} length ({len(packet[16:])}) does not match size claimed in header ({chunk_len_in_header})")
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 3: Chunk #{seq} length ({len(packet[16:])}) does not match size claimed in header ({chunk_len_in_header})")
                 elif CRC32(packet[16:]) != checksum:
-                    if config.DEBUG: print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 4: Chunk #{seq} Checksum Failed")
+                    print(f"[Worker {tcp_addr}] RECEIVER MLT: Chunk Abandoned - 4: Chunk #{seq} Checksum Failed")
                 else:
                     received_chunks[seq] = packet[16:]
                     byte_idx, bit_idx = divmod(seq, 8)
@@ -552,6 +597,11 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
                     # Send the stop signal
                     utility.send_signal_tcp(tcp_sock, b"S", expected_counter)
                     break
+                
+                if udp_recv_counter % 100 == 0 and udp_recv_counter > 0:
+                    # send a signal to the sender
+                    utility.send_signal_tcp(tcp_sock, b"R", expected_counter)
+            
 
             # CRITICAL CHANGE FOR SIGNAL HANDLING
             if tcp_sock in readable:
