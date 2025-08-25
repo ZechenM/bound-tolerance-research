@@ -28,7 +28,7 @@ train_args = TrainingArguments(
     load_best_model_at_end=False,
     dataloader_pin_memory=True,  # Enable pin_memory for faster data transfer to GPU
     report_to="none",
-    logging_first_step=True,  # Log metrics for the first step
+    logging_first_step=False,  # Log metrics for the first step
     # fp8=True,
 )
 

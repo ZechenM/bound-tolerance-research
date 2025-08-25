@@ -8,7 +8,7 @@ from mininet.net import Mininet
 from mininet.node import OVSKernelSwitch, RemoteController
 from mininet.topo import Topo
 
-PYTHON = "/root/.venv/bin/python3.12"
+PYTHON = "/root/shared/.venv/bin/python3.12"
 
 
 class WorkerServerTopo(Topo):
@@ -211,6 +211,9 @@ def run_experiment():
 
 
 if __name__ == "__main__":
+    start_time = time.time()
     topos = {"mltopo": (lambda: WorkerServerTopo())}
     setLogLevel("info")
     run_experiment()
+    end_time = time.time()
+    print(f"Time taken: {end_time - start_time} seconds")

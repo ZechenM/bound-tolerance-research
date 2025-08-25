@@ -27,6 +27,9 @@ class Server:
         self.worker_eval_acc = []
         self.worker_epochs = []
 
+
+
+    
         self.drop_rate = 0.0  # X% probability to zero out gradients
 
         # v-threshold configurations and trackers
@@ -52,6 +55,8 @@ class Server:
         self.start_server()
         self.run_server()
         # Thread(target=self.handle_user_input, daemon=True).start()
+    
+
 
     def write_to_server_port(self):
         print("Writing server port to .server_port file...")
@@ -269,6 +274,10 @@ class Server:
                 self.overall_max_abs_value = 0
                 self.total_params = 0
                 self.zeroed_params = 0
+        
+        # at this point avg gradient should be ready.
+        
+
 
         # Send averaged gradients back to all workers
         for conn in self.connections:

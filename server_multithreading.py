@@ -54,7 +54,33 @@ class Server:
         self.tcp_connections = []
         self.conn_addr_map = {}
 
+        # CLR configurations
+        self.CLR_lst = [] # list of (#th batch from beginning, is_CLR_iter, CLR_curr_grad_norm)
+        # for example, CLR_lst = [(10, True, 1.0), (20, False, 0.5), (30, True, 1.5)]
+        self.CLR_eta = config.CLR_eta
+        self.CLR_iter_count = 0 # count the number of batches from beginning
+        self.is_CLR_iter = True # default to True, so that the first batch will be detected as CLR
+        self.CLR_freq = config.CLR_freq # update every 10 mini batch
+        self.CLR_prev_grad_norm = 0.0
+        self.CLR_curr_grad_norm = 0.0
+        self.CLR_loss_tolerance_counter = 0 # counter for CLR loss tolerance duration
+
         self.write_to_server_port()
+
+    def is_CLR(self, curr_grad_dict):
+        self.CLR_prev_grad_norm = self.CLR_curr_grad_norm
+        
+        all_grads = torch.cat([grad.flatten() for grad in curr_grad_dict.values()])
+        self.CLR_curr_grad_norm = torch.norm(all_grads)
+
+        if self.CLR_iter_count != 0 and self.CLR_prev_grad_norm != 0:
+            relative_change = abs(self.CLR_curr_grad_norm - self.CLR_prev_grad_norm) / self.CLR_prev_grad_norm
+            if relative_change >= self.CLR_eta:
+                return True, relative_change
+            else:   
+                return False, relative_change
+        else:
+            return True, 0.0
 
     def write_to_server_port(self):
         print("Writing server TCP port to .server_port file...")
@@ -121,6 +147,42 @@ class Server:
                 self.received_gradients.clear()
                 self.aggregation_round += 1
 
+                # CLR Detection using fast gradient norm calculation
+                if config.USE_CLR:
+                    self.CLR_iter_count += 1
+                    if self.CLR_iter_count % self.CLR_freq == 0:
+                        # Get current timestamp
+                        import datetime
+                        start_time = datetime.datetime.now()
+                        # Get current epoch from worker data if available
+                        # TODO: leave it for future work since our machines only train for < 5 epochs
+                        # current_epoch = 0  # TODO: get current epoch number from worker data
+                        self.is_CLR_iter, relative_change = self.is_CLR(averaged_gradients)
+                        end_time = datetime.datetime.now()
+                        duration = end_time - start_time    
+                         
+                        if self.is_CLR_iter:
+                            # print(f"[Aggregator] CLR behavior detected at epoch {current_epoch}")
+                            print(f"[Aggregator] Previous grad norm: {self.CLR_prev_grad_norm:.6f}")
+                            print(f"[Aggregator] Current grad norm: {self.CLR_curr_grad_norm:.6f}")
+                            print(f"[Aggregator] Relative change: {relative_change:.6f} (threshold: {self.CLR_eta})")
+                            print(f"[Aggregator] CLR time taken: {duration.total_seconds():.5f} seconds")
+                            self.CLR_lst.append((self.CLR_iter_count, self.is_CLR_iter, self.CLR_curr_grad_norm))
+                            
+                            # Reset counter for CLR loss tolerance duration
+                            self.CLR_loss_tolerance_counter = config.CLR_freq
+                            # Set loss_tolerance to 0 for CLR period
+                            utility.update_loss_tolerance(0.0)
+                            print(f"[Aggregator] CLR detected! Setting loss_tolerance to 0 for next {config.CLR_freq} rounds")
+                
+                # Update CLR loss tolerance counter
+                if config.USE_CLR and self.CLR_loss_tolerance_counter > 0:
+                    self.CLR_loss_tolerance_counter -= 1
+                    if self.CLR_loss_tolerance_counter == 0:
+                        # Restore normal loss_tolerance
+                        utility.update_loss_tolerance(config.loss_tolerance)
+                        print(f"[Aggregator] CLR loss tolerance period ended, restoring normal loss_tolerance ({config.loss_tolerance})")
+
                 # Signal to all waiting worker threads that the new gradients are ready
                 self.aggregation_complete_event.set()
                 print(f"[Aggregator] Event set for round {self.aggregation_round}. Worker threads will now send averaged gradients back.\n")
@@ -171,25 +233,25 @@ class Server:
                         print(f"[{tcp_addr}] Received epoch data: {gradients['epoch']}")
                         print(f"[{tcp_addr}] Received evaluation accuracy: {gradients['eval_acc']}")
                         # ---------- logic for training phase update BEGINS ---------
-                        with self.training_phase_lock:
-                            self.worker_eval_acc.append(gradients["eval_acc"])
-                            self.worker_epochs.append(gradients["epoch"])
-                            self.has_eval_acc[worker_udp_addr] = True
-                            del gradients["eval_acc"]
-                            del gradients["epoch"]
+                        # with self.training_phase_lock:
+                        #     self.worker_eval_acc.append(gradients["eval_acc"])
+                        #     self.worker_epochs.append(gradients["epoch"])
+                        #     self.has_eval_acc[worker_udp_addr] = True
+                        #     del gradients["eval_acc"]
+                        #     del gradients["epoch"]
 
-                            if all(self.has_eval_acc.values()):
-                                print(f"[{tcp_addr}] All workers have reported eval accuracy.")
-                                self._training_phase_update()
+                        #     if all(self.has_eval_acc.values()) and len(self.worker_eval_acc) == self.num_workers:
+                        #         print(f"[{tcp_addr}] All workers have reported eval accuracy.")
+                        #         self._training_phase_update()
 
-                                if self.training_phase == TrainingPhase.BEGIN:
-                                    self.drop_rate = config.BEGIN_DROP
-                                elif self.training_phase == TrainingPhase.MID:
-                                    self.drop_rate = config.MID_DROP
-                                elif self.training_phase == TrainingPhase.FINAL:
-                                    self.drop_rate = config.FINAL_DROP
+                        #         if self.training_phase == TrainingPhase.BEGIN:
+                        #             self.drop_rate = config.BEGIN_DROP
+                        #         elif self.training_phase == TrainingPhase.MID:
+                        #             self.drop_rate = config.MID_DROP
+                        #         elif self.training_phase == TrainingPhase.FINAL:
+                        #             self.drop_rate = config.FINAL_DROP
 
-                                print(f"[{tcp_addr}] Updated drop rate: {self.drop_rate}")
+                        #         print(f"[{tcp_addr}] Updated drop rate: {self.drop_rate}")
                         # ---------- logic for training phase update ENDS -----------
 
                     with self.is_buffer_full:
@@ -281,7 +343,8 @@ class Server:
     # -------------- HELPER FUNCTIONS ---------------------------------------
     def _training_phase_update(self):
         if len(self.worker_eval_acc) < 3:
-            print("this should not happen. ABORTING.")
+            print(f"self.has_eval_acc: {self.has_eval_acc}")
+            print(f"self.worker_eval_acc: {self.worker_eval_acc} less than 3. this should not happen. ABORTING.")
             return
 
         curr_avg_acc = sum(self.worker_eval_acc) / len(self.worker_eval_acc)
