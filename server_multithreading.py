@@ -55,10 +55,10 @@ class Server:
         self.conn_addr_map = {}
 
         # CLR configurations
-        self.CLR_lst = [] # list of (#th batch from begining, is_CLR_iter, CLR_curr_grad_norm)
+        self.CLR_lst = [] # list of (#th batch from beginning, is_CLR_iter, CLR_curr_grad_norm)
         # for example, CLR_lst = [(10, True, 1.0), (20, False, 0.5), (30, True, 1.5)]
         self.CLR_eta = config.CLR_eta
-        self.CLR_iter_count = 0 # count the number of batches from begining
+        self.CLR_iter_count = 0 # count the number of batches from beginning
         self.is_CLR_iter = True # default to True, so that the first batch will be detected as CLR
         self.CLR_freq = config.CLR_freq # update every 10 mini batch
         self.CLR_prev_grad_norm = 0.0
