@@ -4,7 +4,7 @@
 
 **CLR Detection Parameters in server_multithreading.py:**
 
-- **CLR_lst**: List storing CLR detection history as tuples `(communication_count, is_CLR_iter, gradient_norm)`
+- **CLR_lst**: List storing CLR detection history as tuples `(CLR_iter_count, is_CLR_iter, gradient_norm)`
 
   - Example: `[(10, True, 1.0), (20, False, 0.5), (30, True, 1.5)]`
   - Tracks when CLR behavior is detected and the corresponding gradient norms

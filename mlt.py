@@ -445,7 +445,8 @@ def recv_data_mlt(socks: dict, tcp_addr: tuple, expected_counter: int, metadata_
         if udp_addr[0] == "0.0.0.0":
             # If bound to 0.0.0.0, use TCP host
             udp_addr = (tcp_host, udp_addr[1])
-    except:
+    except Exception as e:
+        print(f"[Worker {tcp_addr}] RECEIVER MLT: Error getting UDP address: {e}")
         # If getting fails, use TCP host and default port
         udp_addr = (tcp_host, 0)
 

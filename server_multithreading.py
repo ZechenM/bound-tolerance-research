@@ -154,7 +154,6 @@ class Server:
                         # Get current timestamp
                         import datetime
                         start_time = datetime.datetime.now()
-                        self.CLR_iter_count += 1
                         # Get current epoch from worker data if available
                         # TODO: leave it for future work since our machines only train for < 5 epochs
                         # current_epoch = 0  # TODO: get current epoch number from worker data
